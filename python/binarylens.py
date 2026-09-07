@@ -516,13 +516,16 @@ if HAS_QT:
 
 if HAS_QT:
     class BinaryLensProgressDialog(QtWidgets.QDialog):
-        """Modeless floating progress window with real-time status and STOP button."""
+        """Non-modal floating tool window with real-time status and STOP button."""
         def __init__(self, total_batches: int, on_stop_cb, parent=None):
-            super().__init__(parent)
+            super().__init__(None)
             self.on_stop_cb = on_stop_cb
             self.setWindowTitle("BinaryLens Progress")
-            self.resize(400, 150)
-            self.setWindowFlags(self.windowFlags() | QtCore.Qt.Window)
+            self.resize(380, 140)
+            self.setModal(False)
+            self.setWindowModality(QtCore.Qt.NonModal)
+            self.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint)
+            self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
 
             layout = QtWidgets.QVBoxLayout(self)
 
@@ -835,12 +838,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
         if HAS_QT:
             try:
-                parent = None
-                try:
-                    parent = QtWidgets.QApplication.activeWindow()
-                except Exception:
-                    pass
-                self.progress_dialog = BinaryLensProgressDialog(total_batches, on_stop_cb=self.stop_analysis, parent=parent)
+                self.progress_dialog = BinaryLensProgressDialog(total_batches, on_stop_cb=self.stop_analysis, parent=None)
                 self.progress_dialog.show()
             except Exception:
                 self.progress_dialog = None

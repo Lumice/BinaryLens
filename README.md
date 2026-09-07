@@ -1,83 +1,84 @@
-# BinaryLens (Modernized Fork)
+# BinaryLens
 
 [![GitHub stars](https://img.shields.io/github/stars/Lumice/BinaryLens?style=social)](https://github.com/Lumice/BinaryLens)
 [![IDA Pro](https://img.shields.io/badge/IDA%20Pro-8.x%20%7C%209.x-blue)](https://hex-rays.com/ida-pro/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-*Forked and modernized from the original [Berk000x/BinaryLens](https://github.com/Berk000x/BinaryLens).*
+*Forked and updated from [Berk000x/BinaryLens](https://github.com/Berk000x/BinaryLens).*
 
-**BinaryLens** is an IDA Pro plugin that accelerates reverse engineering by using LLMs to automatically rename subroutines, reconstruct variable names, explain decompiled functions, and summarize binary components.
+BinaryLens is a plugin for IDA Pro that connects to LLMs (large language models) to make reverse engineering faster and easier to read.
 
 ![](imgs/showcase.gif?raw=true)
 
-Compatible with **IDA Pro 8.x and 9.x** (including IDA Pro 9.1 / 9.4 on Windows 10 & 11).
+BinaryLens works with IDA Pro 8.x and 9.x on Windows, macOS, and Linux.
 
 ---
 
-## Quick Start: 2 Ways to Install
+## Features
 
-### Option 1: Drop-in IDAPython Plugin (Recommended, Zero-Compilation)
-No C++ compiler, IDA SDK, or external OpenSSL DLLs required!
+### 1. Rename All Subroutines
+When IDA disassembles a binary file, it gives unknown functions generic names like `sub_140001000`. BinaryLens decompiles these functions in batches, asks the model what they do, and renames them to descriptive names like `ValidateUserToken` or `CalculateCameraTransform`.
 
-1. Copy [`python/binarylens.py`](file:///C:/Users/hue/.gemini/antigravity/scratch/BinaryLens/python/binarylens.py) into your IDA plugins folder:
-   - **User plugins folder (Recommended)**: `%APPDATA%\Hex-Rays\IDA Pro\plugins\`
-   - **System plugins folder**: `%ProgramFiles%\IDA Professional 9.4\plugins\`
-2. Restart IDA Pro or open an IDB.
-3. Access **Edit → BinaryLens → Settings...** to choose your provider, enter your API key or configure a local Ollama endpoint.
+* Menu location: `Edit -> BinaryLens -> Rename all subroutines`
+* You can provide an optional target hint (for example, "Unreal Engine 5 tactical shooter") to help the model pick accurate names.
 
-### Option 2: Native C++ Plugin (`BinaryLens.dll`)
-1. Place **`libcrypto-3-x64.dll`** and **`libssl-3-x64.dll`** into the IDA root directory (e.g. `%ProgramFiles%/IDA Professional 9.4`).
-2. Copy the compiled **`BinaryLens.dll`** into `%ProgramFiles%/IDA Professional 9.4/plugins`.
+### 2. Rename Variables in a Function
+In the Hex-Rays pseudocode view, local variables often have generic names like `a1`, `v1`, and `v2`. BinaryLens reads the function code and renames those variables to names that describe their purpose, like `socket_handle` or `packet_size`.
 
----
+* How to use: Right-click inside any pseudocode window and select `BinaryLens: Rename Variables`.
 
-## Model & Provider Support
+### 3. Explain Current Function
+BinaryLens reads the decompiled C pseudocode of the active function and prints an explanation in the IDA Output window. The explanation describes the purpose of the function, the function arguments, and potential security issues.
 
-BinaryLens works with **any model from any provider that supports the standard OpenAI-compatible API format**. There are no hardcoded model restrictions.
+* How to use: Right-click inside any pseudocode window and select `BinaryLens: Explain Function`.
 
-You simply configure:
-- **API Base URL**: The endpoint of your chosen provider or local server.
-- **Model Identifier**: Any model name you wish to invoke (cloud or local).
-- **API Key**: Your API key (or leave empty for local inference).
+### 4. Floating Progress Window with Instant Stop
+When you start a batch analysis, a small floating tool window appears.
+* It displays the current batch number, the total batches, and how many functions were renamed.
+* It stays on top in the corner of your screen without blocking you from navigating, scrolling, or clicking in IDA.
+* If you want to halt the process, click the `Stop Analysis` button. The window closes immediately and preserves all renames completed so far.
+* You can also click `Edit -> BinaryLens -> Stop analysis` from the menu at any time.
 
-### Common Endpoints
-
-- **Local Inference (Private & Offline)**:
-  - **Ollama**: `http://localhost:11434/v1` (no API key required)
-  - **LM Studio**: `http://localhost:1234/v1` (no API key required)
-  - **vLLM / llama.cpp / LocalAI**: Point to your local endpoint `/v1`
-- **Cloud Providers**:
-  - **OpenCode Go**: `https://opencode.ai/zen/go/v1` (Default: `deepseek-v4-flash`; also supports `qwen3.8-flash`, `qwen3.7-plus`, `minimax-m3`, `glm-5.3-flash`, `kimi-k3`, `grok-4.6`, `gpt-5.6-luna`, `longcat-2.0`, `mimo-v2.5`)
-  - **OpenCode Zen**: `https://opencode.ai/zen/v1`
-  - **OpenAI**: `https://api.openai.com/v1`
-  - **Google Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai`
-  - **DeepSeek**: `https://api.deepseek.com/v1`
-  - **OpenRouter**: `https://openrouter.ai/api/v1` (Claude, Llama, Qwen, etc.)
-  - Any custom corporate gateway or reverse proxy.
+### 5. Reasoning Level Control
+Some models, like DeepSeek V4 Flash, spend extra tokens on internal chain-of-thought thinking before they answer. BinaryLens includes a Reasoning Level setting (`none`, `low`, `medium`, `high`).
+* Setting the level to `none` is recommended for batch renaming. This mode delivers maximum speed and prevents the model from running out of tokens on large function lists.
 
 ---
 
-## Features & Usage
+## Installation (IDAPython Plugin)
 
-1. **Rename all subroutines**:
-   - Menu: **Edit → BinaryLens → Rename all subroutines**.
-   - Automatically decompiles `sub_*` routines, batches them to preserve context while avoiding timeouts, and assigns descriptive PascalCase names (e.g., `sub_140001000` $\rightarrow$ `DecryptAesPayload`).
-2. **Rename Variables**:
-   - In Hex-Rays Pseudocode view: **Right-click → BinaryLens: Rename Variables**.
-   - Semantically renames obscure local variables (`a1`, `v1`, `v2` $\rightarrow$ `socket_fd`, `buffer_len`, `key_schedule`).
-3. **Explain Function**:
-   - In Hex-Rays Pseudocode view: **Right-click → BinaryLens: Explain Function**.
-   - Generates an executive summary, argument breakdown, and security analysis.
-4. **Interactive Settings**:
-   - Menu: **Edit → BinaryLens → Settings...** (in IDAPython) or **Edit → BinaryLens → Select model** (in C++).
+You do not need a C++ compiler or external DLL files.
+
+1. Copy `python/binarylens.py` into your IDA plugins directory:
+   * Windows: `%APPDATA%\Hex-Rays\IDA Pro\plugins\`
+   * Linux / macOS: `~/.idapro/plugins/`
+2. Start IDA Pro.
+3. Open `Edit -> BinaryLens -> Settings...` to choose your provider, enter your API key, and select your model.
 
 ---
 
-## Compiling the C++ Plugin (Optional)
-If building the native C++ DLL from source:
-1. Open `BinaryLens.sln` in Visual Studio 2022.
-2. Ensure you have the **IDA 9.x SDK** (`idasdk`) and **OpenSSL 3.x x64** installed.
-3. Update `AdditionalIncludeDirectories` and `AdditionalDependencies` in project settings to match your local SDK paths.
-4. Build in **Release | x64**.
+## Supported Providers
 
+BinaryLens works with any provider that supports the standard OpenAI-compatible format:
+
+* **OpenCode Go & Zen**: `https://opencode.ai/zen/go/v1` (Default model: `deepseek-v4-flash`)
+* **Local Offline Models (Ollama)**: `http://localhost:11434/v1` (no API key required)
+* **Local Offline Models (LM Studio)**: `http://localhost:1234/v1` (no API key required)
+* **Google Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai`
+* **DeepSeek**: `https://api.deepseek.com/v1`
+* **OpenAI**: `https://api.openai.com/v1`
+* **OpenRouter**: `https://openrouter.ai/api/v1`
+
+---
+
+## Configuration Settings
+
+Open `Edit -> BinaryLens -> Settings...` to customize your setup:
+
+* **Preset**: Quick-fills the base URL and recommended model for popular providers.
+* **Base URL**: The web address of the completion API endpoint.
+* **Model Name**: The model identifier you want to call (such as `deepseek-v4-flash` or `gemini-2.5-pro`).
+* **API Key**: Your secret key for cloud providers. Leave this empty for local tools like Ollama or LM Studio.
+* **Batch Size**: The number of functions sent in each prompt (default: `40`).
+* **Reasoning Level**: The thinking intensity for reasoning models. Keep this at `none` for fast batch renaming.
