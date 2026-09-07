@@ -349,15 +349,17 @@ def call_llm(
         req.add_header("Authorization", f"Bearer {api_key}")
 
     ctx = ssl.create_default_context()
+    t0 = time.time()
 
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+            elapsed = time.time() - t0
             resp_body = resp.read().decode("utf-8")
             data = json.loads(resp_body)
             choices = data.get("choices", [])
             if not choices:
                 if on_log:
-                    on_log("[BinaryLens] Warning: Provider returned empty choices array.\n")
+                    on_log(f"[BinaryLens] Warning: Provider returned empty choices array ({elapsed:.1f}s).\n")
                 return None
             first_choice = choices[0]
             msg = first_choice.get("message", {})
@@ -366,8 +368,10 @@ def call_llm(
 
             if not content:
                 if on_log:
-                    on_log(f"[BinaryLens] Warning: Empty content returned from model (finish_reason: {finish_reason}).\n")
+                    on_log(f"[BinaryLens] Warning: Empty content returned from model ({elapsed:.1f}s, finish_reason: {finish_reason}).\n")
                 return None
+            if on_log:
+                on_log(f"[BinaryLens] Response received in {elapsed:.1f}s.\n")
             return content
     except urllib.error.HTTPError as e:
         err_msg = e.read().decode("utf-8", errors="ignore")
