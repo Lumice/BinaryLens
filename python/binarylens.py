@@ -660,9 +660,32 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             ida_kernwin.warning("[BinaryLens] Analysis is already in progress!")
             return
 
-        user_hint = ida_kernwin.ask_str("", 0, "(Optional) Provide background info or target hints for the binary:")
-        if user_hint is None:
-            return
+        user_hint = ""
+        if HAS_QT:
+            try:
+                parent = None
+                try:
+                    parent = QtWidgets.QApplication.activeWindow()
+                except Exception:
+                    pass
+                text, ok = QtWidgets.QInputDialog.getText(
+                    parent,
+                    "BinaryLens",
+                    "Target Hint (Optional background info or domain context):",
+                    QtWidgets.QLineEdit.Normal,
+                    ""
+                )
+                if not ok:
+                    return
+                user_hint = text.strip()
+            except Exception:
+                user_hint = ida_kernwin.ask_str("", -1, "(Optional) Provide background info or target hints for the binary:")
+                if user_hint is None:
+                    return
+        else:
+            user_hint = ida_kernwin.ask_str("", -1, "(Optional) Provide background info or target hints for the binary:")
+            if user_hint is None:
+                return
 
         self.worker_thread = threading.Thread(
             target=self._worker_rename_subs,
