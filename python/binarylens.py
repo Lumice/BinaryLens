@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     "max_tokens_per_req": 128000,
     "timeout_sec": 180,
     "reasoning_effort": "none",
+    "max_func_size_kb": 12,
     "hint_history": [],
 }
 
@@ -471,6 +472,13 @@ if HAS_QT:
             self.reasoning_combo.setToolTip("Reasoning/thinking effort for models that support it. 'none' or 'low' is recommended for batch analysis.")
             form_layout.addRow("Reasoning Level:", self.reasoning_combo)
 
+            # Max Function Size (KB)
+            self.max_func_size_spin = QtWidgets.QSpinBox()
+            self.max_func_size_spin.setRange(0, 200)
+            self.max_func_size_spin.setValue(int(config.get("max_func_size_kb", 12)))
+            self.max_func_size_spin.setToolTip("Skip functions larger than this size in batch mode to avoid freezing Hex-Rays on unrolled code (e.g. 12 KB). Set to 0 to disable limit.")
+            form_layout.addRow("Max Function Size (KB):", self.max_func_size_spin)
+
             main_layout.addLayout(form_layout)
 
             # Test connection row
@@ -591,6 +599,7 @@ if HAS_QT:
                 "api_key": self.api_key_edit.text().strip(),
                 "batch_size": self.batch_size_spin.value(),
                 "reasoning_effort": self.reasoning_combo.currentText(),
+                "max_func_size_kb": self.max_func_size_spin.value(),
             }
 
 
@@ -1056,6 +1065,8 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 decompiled_chunks: List[str] = []
                 total_in_batch = len(batch)
                 model_name = self.config.get("model", "model")
+                max_func_size_kb = int(self.config.get("max_func_size_kb", 12))
+                max_func_bytes = max_func_size_kb * 1024 if max_func_size_kb > 0 else 0
 
                 for idx, (ea, name) in enumerate(batch):
                     if not self.is_running:
@@ -1080,6 +1091,11 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     def decompile_single():
                         f = ida_funcs.get_func(ea)
                         if not f:
+                            return 1
+                        # Skip pathological monster functions (e.g. unrolled 23 KB tables with 2,000+ variables)
+                        f_size = f.size()
+                        if max_func_bytes > 0 and f_size > max_func_bytes:
+                            ida_kernwin.msg(f"[BinaryLens] Skipping {name} at 0x{ea:X}: {f_size / 1024:.1f} KB exceeds {max_func_size_kb} KB batch limit.\n")
                             return 1
                         try:
                             cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
@@ -1187,9 +1203,10 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
             def notify_done():
                 if getattr(self, "progress_dialog", None):
-                    self.progress_dialog.mark_finished(total_renamed, aborted=(not self.is_running))
-                else:
-                    ida_kernwin.info(msg_str)
+                    try:
+                        self.progress_dialog.mark_finished(total_renamed, aborted=(not self.is_running))
+                    except Exception:
+                        pass
                 return 1
 
             ida_kernwin.execute_sync(notify_done, ida_kernwin.MFF_FAST)
