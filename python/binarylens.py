@@ -72,6 +72,14 @@ def qt_enum(owner, scope: str, member: str, default: Any = None) -> Any:
 
 def get_func_content_hash(ea: int) -> str:
     """Compute a fast hash of the function byte content to detect stale/concurrent modifications."""
+    if threading.current_thread() is not threading.main_thread():
+        res: List[str] = []
+        def sync_hash():
+            res.append(get_func_content_hash(ea))
+            return 1
+        ida_kernwin.execute_sync(sync_hash, ida_kernwin.MFF_READ)
+        return res[0] if res else ""
+
     f = ida_funcs.get_func(ea)
     if not f:
         return ""
@@ -1279,7 +1287,11 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                         f"Batch {b_idx}: Decompiled {len(batch_items)} functions ({cur_processed}/{total_targets})..."
                     )
 
-                return batch_items, chunks, consumed
+                # Compute allowlist and content hashes while on the main thread
+                submitted = {n: a for a, n in batch_items}
+                submitted_hashes = {a: get_func_content_hash(a) for a, n in batch_items}
+
+                return batch_items, chunks, consumed, submitted, submitted_hashes
 
             def fetch_next_batch(b_idx: int):
                 """Pulls and decompiles the next batch using a single execute_sync call."""
@@ -1296,15 +1308,13 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     if sync_rc < 0 or not decomp_res:
                         return None
 
-                    batch_items, chunks, consumed = decomp_res[0]
+                    batch_items, chunks, consumed, submitted, submitted_hashes = decomp_res[0]
                     if consumed > 0:
                         del pending_queue[:consumed]
                     else:
                         del pending_queue[:len(candidates)]
 
                     if batch_items:
-                        submitted = {n: a for a, n in batch_items}
-                        submitted_hashes = {a: get_func_content_hash(a) for a, n in batch_items}
                         return (b_idx, batch_items, chunks, submitted, submitted_hashes)
 
                 return None
