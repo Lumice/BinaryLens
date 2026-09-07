@@ -657,7 +657,22 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
     def rename_all_subs(self):
         if self.is_running:
-            ida_kernwin.warning("[BinaryLens] Analysis is already in progress!")
+            if HAS_QT:
+                res = QtWidgets.QMessageBox.question(
+                    None,
+                    "BinaryLens",
+                    "Subroutine analysis is currently in progress.\nDo you want to stop it?",
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No
+                )
+                if res == QtWidgets.QMessageBox.StandardButton.Yes:
+                    self.is_running = False
+                    ida_kernwin.msg("[BinaryLens] Stop requested. Analysis will halt after the current batch.\n")
+            else:
+                res = ida_kernwin.ask_yn(ida_kernwin.ASKBTN_NO, "BinaryLens analysis is already running. Do you want to stop it?")
+                if res == ida_kernwin.ASKBTN_YES:
+                    self.is_running = False
+                    ida_kernwin.msg("[BinaryLens] Stop requested. Analysis will halt after the current batch.\n")
             return
 
         user_hint = ""
@@ -687,57 +702,68 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             if user_hint is None:
                 return
 
+        # 1. Collect candidate sub_* functions on the main thread
+        targets: List[Tuple[int, str]] = []
+        qty = ida_funcs.get_func_qty()
+        for i in range(qty):
+            f = ida_funcs.getn_func(i)
+            if not f:
+                continue
+            name = ida_funcs.get_func_name(f.start_ea)
+            if name and name.startswith("sub_"):
+                targets.append((f.start_ea, name))
+
+        if not targets:
+            ida_kernwin.msg("[BinaryLens] No sub_* functions found to rename.\n")
+            return
+
+        ida_kernwin.msg(f"\n[BinaryLens] === Starting Subroutine Analysis ===\n")
+        ida_kernwin.msg(f"[BinaryLens] Found {len(targets)} candidate subroutines.\n")
+
         self.worker_thread = threading.Thread(
             target=self._worker_rename_subs,
-            args=(user_hint,),
+            args=(targets, user_hint),
             daemon=True
         )
         self.worker_thread.start()
 
-    def _worker_rename_subs(self, user_hint: str):
+    def _worker_rename_subs(self, targets: List[Tuple[int, str]], user_hint: str):
         self.is_running = True
         try:
-            ida_kernwin.msg("\n[BinaryLens] === Starting Subroutine Analysis ===\n")
-
-            # 1. Collect all sub_* functions
-            targets: List[Tuple[int, str]] = []
-            qty = ida_funcs.get_func_qty()
-            for i in range(qty):
-                f = ida_funcs.getn_func(i)
-                if not f:
-                    continue
-                name = ida_funcs.get_func_name(f.start_ea)
-                if name and name.startswith("sub_"):
-                    targets.append((f.start_ea, name))
-
-            if not targets:
-                ida_kernwin.msg("[BinaryLens] No sub_* functions found to rename.\n")
-                return
-
-            ida_kernwin.msg(f"[BinaryLens] Found {len(targets)} candidate subroutines.\n")
-
-            # 2. Batch and process
-            batch_size = self.config.get("batch_size", 40)
+            batch_size = max(1, int(self.config.get("batch_size", 40)))
             total_renamed = 0
+            total_batches = (len(targets) + batch_size - 1) // batch_size
 
             for batch_start in range(0, len(targets), batch_size):
-                batch = targets[batch_start:batch_start + batch_size]
-                ida_kernwin.msg(f"[BinaryLens] Processing batch {batch_start // batch_size + 1} ({len(batch)} functions)...\n")
+                if not self.is_running:
+                    ida_kernwin.msg("[BinaryLens] Analysis cancelled by user.\n")
+                    break
 
+                batch = targets[batch_start:batch_start + batch_size]
+                batch_num = (batch_start // batch_size) + 1
+                ida_kernwin.msg(f"[BinaryLens] Processing batch {batch_num}/{total_batches} ({len(batch)} functions)...\n")
+
+                # Decompile batch functions on the main thread via execute_sync
                 decompiled_chunks: List[str] = []
-                for ea, name in batch:
-                    f = ida_funcs.get_func(ea)
-                    if not f:
-                        continue
-                    try:
-                        cfunc = ida_hexrays.decompile(f)
-                        if cfunc:
-                            lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
-                            decompiled_chunks.append("\n".join(lines))
-                    except Exception:
-                        continue
+
+                def decompile_batch():
+                    for ea, name in batch:
+                        f = ida_funcs.get_func(ea)
+                        if not f:
+                            continue
+                        try:
+                            cfunc = ida_hexrays.decompile(f)
+                            if cfunc:
+                                lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
+                                decompiled_chunks.append("\n".join(lines))
+                        except Exception:
+                            continue
+                    return 1
+
+                ida_kernwin.execute_sync(decompile_batch, ida_kernwin.MFF_WRITE)
 
                 if not decompiled_chunks:
+                    ida_kernwin.msg(f"[BinaryLens] Batch {batch_num}/{total_batches}: No functions could be decompiled, skipping.\n")
                     continue
 
                 user_prompt = ""
@@ -753,12 +779,16 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 )
 
                 if not raw_resp:
-                    ida_kernwin.msg(f"[BinaryLens] Failed to get response for batch {batch_start // batch_size + 1}.\n")
+                    ida_kernwin.msg(f"[BinaryLens] Batch {batch_num}/{total_batches}: Failed to get response from model.\n")
                     continue
 
                 summary, renames = parse_model_response(raw_resp)
                 if summary:
                     ida_kernwin.msg(f"[BinaryLens] Component Summary: {summary}\n")
+
+                if not renames:
+                    ida_kernwin.msg(f"[BinaryLens] Batch {batch_num}/{total_batches}: No renames returned by model.\n")
+                    continue
 
                 def apply_batch():
                     nonlocal total_renamed
@@ -773,7 +803,12 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 ida_kernwin.execute_sync(apply_batch, ida_kernwin.MFF_WRITE)
 
             ida_kernwin.msg(f"\n[BinaryLens] Analysis complete! Successfully renamed {total_renamed} functions.\n")
-            ida_kernwin.info(f"BinaryLens: Renamed {total_renamed} functions.")
+
+            def notify_done():
+                ida_kernwin.info(f"BinaryLens: Renamed {total_renamed} functions.")
+                return 1
+
+            ida_kernwin.execute_sync(notify_done, ida_kernwin.MFF_FAST)
 
         except Exception as e:
             ida_kernwin.msg(f"[BinaryLens] Error during analysis: {e}\n")
@@ -807,7 +842,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         )
 
         if not raw_resp:
-            ida_kernwin.warning("[BinaryLens] Failed to get response from model.")
+            ida_kernwin.msg("[BinaryLens] Failed to get response from model for variable renaming.\n")
             return
 
         summary, renames = parse_model_response(raw_resp)
@@ -854,7 +889,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             if resp:
                 ida_kernwin.msg(f"\n========== BinaryLens: Explanation for {func_name} ==========\n\n{resp}\n\n============================================================\n")
             else:
-                ida_kernwin.warning("Failed to generate explanation.")
+                ida_kernwin.msg(f"[BinaryLens] Failed to generate explanation for {func_name}.\n")
 
         threading.Thread(target=worker, daemon=True).start()
 
