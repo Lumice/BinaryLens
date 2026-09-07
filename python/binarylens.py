@@ -59,6 +59,7 @@ DEFAULT_CONFIG = {
     "batch_size": 40,
     "max_tokens_per_req": 128000,
     "timeout_sec": 180,
+    "reasoning_effort": "none",
 }
 
 ENDPOINT_PRESETS = {
@@ -246,6 +247,11 @@ def call_llm(
     if "deepseek" in model.lower():
         payload["max_tokens"] = 8192
 
+    # Reasoning effort (OpenCode Go, DeepSeek, OpenAI reasoning models)
+    reasoning_effort = config.get("reasoning_effort", "none")
+    if reasoning_effort and reasoning_effort != "default":
+        payload["reasoning_effort"] = reasoning_effort
+
     body_bytes = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(endpoint, data=body_bytes, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -266,7 +272,20 @@ def call_llm(
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
             resp_body = resp.read().decode("utf-8")
             data = json.loads(resp_body)
-            content = data["choices"][0]["message"]["content"]
+            choices = data.get("choices", [])
+            if not choices:
+                if on_log:
+                    on_log("[BinaryLens] Warning: Provider returned empty choices array.\n")
+                return None
+            first_choice = choices[0]
+            msg = first_choice.get("message", {})
+            content = msg.get("content") or msg.get("reasoning_content") or ""
+            finish_reason = first_choice.get("finish_reason")
+
+            if not content:
+                if on_log:
+                    on_log(f"[BinaryLens] Warning: Empty content returned from model (finish_reason: {finish_reason}).\n")
+                return None
             return content
     except urllib.error.HTTPError as e:
         err_msg = e.read().decode("utf-8", errors="ignore")
@@ -360,6 +379,16 @@ if HAS_QT:
             self.batch_size_spin.setValue(int(config.get("batch_size", 40)))
             self.batch_size_spin.setToolTip("Number of subroutines analyzed per prompt batch.")
             form_layout.addRow("Batch Size:", self.batch_size_spin)
+
+            # Reasoning Level
+            self.reasoning_combo = QtWidgets.QComboBox()
+            self.reasoning_options = ["none", "low", "medium", "high", "default"]
+            self.reasoning_combo.addItems(self.reasoning_options)
+            cur_effort = config.get("reasoning_effort", "none")
+            if cur_effort in self.reasoning_options:
+                self.reasoning_combo.setCurrentIndex(self.reasoning_options.index(cur_effort))
+            self.reasoning_combo.setToolTip("Reasoning/thinking effort for models that support it. 'none' or 'low' is recommended for batch analysis.")
+            form_layout.addRow("Reasoning Level:", self.reasoning_combo)
 
             main_layout.addLayout(form_layout)
 
@@ -480,6 +509,7 @@ if HAS_QT:
                 "model": self.model_edit.text().strip(),
                 "api_key": self.api_key_edit.text().strip(),
                 "batch_size": self.batch_size_spin.value(),
+                "reasoning_effort": self.reasoning_combo.currentText(),
             }
 
 
