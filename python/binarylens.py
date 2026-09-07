@@ -104,7 +104,7 @@ DEFAULT_CONFIG = {
     "api_key": "",
     "batch_size": 40,
     "max_tokens_per_req": 128000,
-    "timeout_sec": 180,
+    "timeout_sec": 45,
     "reasoning_effort": "none",
     "max_func_size_kb": 12,
     "hint_history": [],
@@ -384,7 +384,11 @@ def call_llm(
     endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
     model = config.get("model", "deepseek-v4-flash")
     api_key = config.get("api_key", "").strip()
-    timeout = config.get("timeout_sec", 180)
+    raw_timeout = config.get("timeout_sec", 45)
+    try:
+        timeout = max(15, min(90, int(raw_timeout)))
+    except (ValueError, TypeError):
+        timeout = 45
 
     payload = {
         "model": model,
@@ -426,8 +430,9 @@ def call_llm(
         if cancel_check and cancel_check():
             return None
 
-        if on_log and attempt == 0:
-            on_log(f"[BinaryLens] Dispatching request to {endpoint} (Model: {model})...\n")
+        if on_log:
+            attempt_info = f" (Attempt {attempt + 1}/{MAX_RETRIES + 1})" if attempt > 0 else ""
+            on_log(f"[BinaryLens] Dispatching request to {endpoint} (Model: {model}){attempt_info}...\n")
 
         t0 = time.time()
         try:
@@ -1234,7 +1239,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             decomp_flags = ida_hexrays.DECOMP_NO_WAIT | ida_hexrays.DECOMP_WARNINGS
             max_func_size_kb = int(self.config.get("max_func_size_kb", 12))
             max_func_bytes = max_func_size_kb * 1024 if max_func_size_kb > 0 else 0
-            MAX_BATCH_PROMPT_CHARS = 120000
+            MAX_BATCH_PROMPT_CHARS = 45000
 
             pending_queue = list(targets)
             total_targets = len(targets)
