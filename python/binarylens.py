@@ -483,6 +483,74 @@ if HAS_QT:
             }
 
 
+if HAS_QT:
+    class BinaryLensProgressDialog(QtWidgets.QDialog):
+        """Modeless floating progress window with real-time status and STOP button."""
+        def __init__(self, total_batches: int, on_stop_cb, parent=None):
+            super().__init__(parent)
+            self.on_stop_cb = on_stop_cb
+            self.setWindowTitle("BinaryLens Progress")
+            self.resize(400, 150)
+            self.setWindowFlags(self.windowFlags() | QtCore.Qt.Window)
+
+            layout = QtWidgets.QVBoxLayout(self)
+
+            self.status_lbl = QtWidgets.QLabel("Initializing analysis...")
+            self.status_lbl.setStyleSheet("font-weight: bold; font-size: 10pt;")
+            layout.addWidget(self.status_lbl)
+
+            self.pbar = QtWidgets.QProgressBar()
+            self.pbar.setRange(0, total_batches)
+            self.pbar.setValue(0)
+            self.pbar.setTextVisible(True)
+            layout.addWidget(self.pbar)
+
+            self.stats_lbl = QtWidgets.QLabel("Renamed: 0 functions")
+            layout.addWidget(self.stats_lbl)
+
+            btn_layout = QtWidgets.QHBoxLayout()
+            btn_layout.addStretch()
+
+            self.stop_btn = QtWidgets.QPushButton("Stop Analysis")
+            self.stop_btn.setStyleSheet("padding: 6px 18px; font-weight: bold;")
+            self.stop_btn.clicked.connect(self._handle_stop)
+            btn_layout.addWidget(self.stop_btn)
+
+            layout.addLayout(btn_layout)
+
+        def _handle_stop(self):
+            self.stop_btn.setEnabled(False)
+            self.stop_btn.setText("Stopping...")
+            self.status_lbl.setText("Stopping after current batch...")
+            if self.on_stop_cb:
+                self.on_stop_cb()
+
+        def update_progress(self, batch_num: int, total_batches: int, renamed_count: int):
+            self.pbar.setValue(batch_num)
+            self.status_lbl.setText(f"Batch {batch_num} of {total_batches}")
+            self.stats_lbl.setText(f"Renamed: {renamed_count} functions")
+
+        def mark_finished(self, total_renamed: int, aborted: bool = False):
+            self.stop_btn.setEnabled(True)
+            self.stop_btn.setText("Close")
+            try:
+                self.stop_btn.clicked.disconnect()
+            except Exception:
+                pass
+            self.stop_btn.clicked.connect(self.close)
+            if aborted:
+                self.status_lbl.setText("Analysis stopped by user.")
+            else:
+                self.status_lbl.setText("Analysis complete!")
+            self.stats_lbl.setText(f"Total renamed: {total_renamed} functions")
+
+        def closeEvent(self, event):
+            if self.stop_btn.text() != "Close":
+                if self.on_stop_cb:
+                    self.on_stop_cb()
+            event.accept()
+
+
 class IdaFormSettingsDialog(ida_kernwin.Form):
     """Fallback configuration dialog using native IDA Form."""
     def __init__(self, config: dict):
@@ -544,6 +612,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         self.config = load_config()
         self.worker_thread: Optional[threading.Thread] = None
         self.is_running = False
+        self.progress_dialog = None
 
     def init(self):
         if not ida_hexrays.init_hexrays_plugin():
@@ -573,7 +642,19 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         ida_kernwin.register_action(rename_subs_desc)
         ida_kernwin.attach_action_to_menu("Edit/BinaryLens/", "binarylens:rename_subs", ida_kernwin.SETMENU_APP)
 
-        # Action 2: Settings
+        # Action 2: Stop Analysis
+        stop_analysis_desc = ida_kernwin.action_desc_t(
+            "binarylens:stop_analysis",
+            "Stop analysis",
+            _ActionHandler(self.stop_analysis),
+            "",
+            "Stop ongoing BinaryLens subroutine analysis",
+            -1
+        )
+        ida_kernwin.register_action(stop_analysis_desc)
+        ida_kernwin.attach_action_to_menu("Edit/BinaryLens/", "binarylens:stop_analysis", ida_kernwin.SETMENU_APP)
+
+        # Action 3: Settings
         settings_desc = ida_kernwin.action_desc_t(
             "binarylens:settings",
             "Settings...",
@@ -585,7 +666,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         ida_kernwin.register_action(settings_desc)
         ida_kernwin.attach_action_to_menu("Edit/BinaryLens/", "binarylens:settings", ida_kernwin.SETMENU_APP)
 
-        # Action 3: Rename Variables (Context Menu)
+        # Action 4: Rename Variables (Context Menu)
         rename_vars_desc = ida_kernwin.action_desc_t(
             "binarylens:rename_vars",
             "BinaryLens: Rename Variables",
@@ -596,7 +677,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         )
         ida_kernwin.register_action(rename_vars_desc)
 
-        # Action 4: Explain Function
+        # Action 5: Explain Function
         explain_desc = ida_kernwin.action_desc_t(
             "binarylens:explain_func",
             "BinaryLens: Explain Function",
@@ -615,9 +696,17 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         if hasattr(self, "ui_hooks") and self.ui_hooks:
             self.ui_hooks.unhook()
         ida_kernwin.unregister_action("binarylens:rename_subs")
+        ida_kernwin.unregister_action("binarylens:stop_analysis")
         ida_kernwin.unregister_action("binarylens:settings")
         ida_kernwin.unregister_action("binarylens:rename_vars")
         ida_kernwin.unregister_action("binarylens:explain_func")
+
+    def stop_analysis(self):
+        if not self.is_running:
+            ida_kernwin.msg("[BinaryLens] No analysis is currently running.\n")
+            return
+        self.is_running = False
+        ida_kernwin.msg("[BinaryLens] Stop requested. Analysis will halt after the current batch finishes.\n")
 
     def show_settings(self):
         if HAS_QT:
@@ -666,13 +755,11 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     QtWidgets.QMessageBox.StandardButton.No
                 )
                 if res == QtWidgets.QMessageBox.StandardButton.Yes:
-                    self.is_running = False
-                    ida_kernwin.msg("[BinaryLens] Stop requested. Analysis will halt after the current batch.\n")
+                    self.stop_analysis()
             else:
                 res = ida_kernwin.ask_yn(ida_kernwin.ASKBTN_NO, "BinaryLens analysis is already running. Do you want to stop it?")
                 if res == ida_kernwin.ASKBTN_YES:
-                    self.is_running = False
-                    ida_kernwin.msg("[BinaryLens] Stop requested. Analysis will halt after the current batch.\n")
+                    self.stop_analysis()
             return
 
         user_hint = ""
@@ -720,6 +807,21 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         ida_kernwin.msg(f"\n[BinaryLens] === Starting Subroutine Analysis ===\n")
         ida_kernwin.msg(f"[BinaryLens] Found {len(targets)} candidate subroutines.\n")
 
+        batch_size = max(1, int(self.config.get("batch_size", 40)))
+        total_batches = (len(targets) + batch_size - 1) // batch_size
+
+        if HAS_QT:
+            try:
+                parent = None
+                try:
+                    parent = QtWidgets.QApplication.activeWindow()
+                except Exception:
+                    pass
+                self.progress_dialog = BinaryLensProgressDialog(total_batches, on_stop_cb=self.stop_analysis, parent=parent)
+                self.progress_dialog.show()
+            except Exception:
+                self.progress_dialog = None
+
         self.worker_thread = threading.Thread(
             target=self._worker_rename_subs,
             args=(targets, user_hint),
@@ -742,6 +844,12 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 batch = targets[batch_start:batch_start + batch_size]
                 batch_num = (batch_start // batch_size) + 1
                 ida_kernwin.msg(f"[BinaryLens] Processing batch {batch_num}/{total_batches} ({len(batch)} functions)...\n")
+
+                def sync_update_batch():
+                    if getattr(self, "progress_dialog", None):
+                        self.progress_dialog.update_progress(batch_num, total_batches, total_renamed)
+                    return 1
+                ida_kernwin.execute_sync(sync_update_batch, ida_kernwin.MFF_FAST)
 
                 # Decompile batch functions on the main thread via execute_sync
                 decompiled_chunks: List[str] = []
@@ -802,10 +910,22 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
                 ida_kernwin.execute_sync(apply_batch, ida_kernwin.MFF_WRITE)
 
-            ida_kernwin.msg(f"\n[BinaryLens] Analysis complete! Successfully renamed {total_renamed} functions.\n")
+                def sync_update_count():
+                    if getattr(self, "progress_dialog", None):
+                        self.progress_dialog.update_progress(batch_num, total_batches, total_renamed)
+                    return 1
+                ida_kernwin.execute_sync(sync_update_count, ida_kernwin.MFF_FAST)
+
+            msg_str = f"BinaryLens: Analysis complete! Successfully renamed {total_renamed} functions."
+            if not self.is_running:
+                msg_str = f"BinaryLens: Analysis stopped by user. Successfully renamed {total_renamed} functions."
+            ida_kernwin.msg(f"\n[BinaryLens] {msg_str}\n")
 
             def notify_done():
-                ida_kernwin.info(f"BinaryLens: Renamed {total_renamed} functions.")
+                if getattr(self, "progress_dialog", None):
+                    self.progress_dialog.mark_finished(total_renamed, aborted=(not self.is_running))
+                else:
+                    ida_kernwin.info(msg_str)
                 return 1
 
             ida_kernwin.execute_sync(notify_done, ida_kernwin.MFF_FAST)
