@@ -26,6 +26,18 @@ import ida_kernwin
 import ida_lines
 import ida_name
 
+# Qt UI support (bundled with IDA Pro 7.x - 9.x)
+HAS_QT = False
+try:
+    from PyQt5 import QtWidgets, QtCore, QtGui
+    HAS_QT = True
+except ImportError:
+    try:
+        from PyQt6 import QtWidgets, QtCore, QtGui
+        HAS_QT = True
+    except ImportError:
+        pass
+
 # Default configuration
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "BinaryLens")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -247,8 +259,168 @@ def call_llm(
         return None
 
 
-class SettingsDialog(ida_kernwin.Form):
-    """Configuration form for BinaryLens."""
+if HAS_QT:
+    class QtSettingsDialog(QtWidgets.QDialog):
+        """Native Qt configuration dialog for BinaryLens."""
+        def __init__(self, config: dict, parent=None):
+            super().__init__(parent)
+            self.config = config
+            self.setWindowTitle("BinaryLens Configuration")
+            self.setMinimumWidth(560)
+
+            main_layout = QtWidgets.QVBoxLayout(self)
+            main_layout.setSpacing(12)
+
+            title_label = QtWidgets.QLabel("<b>BinaryLens Configuration</b>")
+            subtitle_label = QtWidgets.QLabel("Configure your LLM provider, OpenAI-compatible Base URL, Model Name, and API Key.")
+            subtitle_label.setStyleSheet("color: gray; margin-bottom: 6px;")
+            main_layout.addWidget(title_label)
+            main_layout.addWidget(subtitle_label)
+
+            form_layout = QtWidgets.QFormLayout()
+            form_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.ExpandingFieldsGrow)
+
+            # Presets dropdown
+            self.preset_combo = QtWidgets.QComboBox()
+            self.presets_list = list(ENDPOINT_PRESETS.keys())
+            self.preset_combo.addItems(self.presets_list)
+            cur_preset = config.get("preset", "")
+            if cur_preset in self.presets_list:
+                self.preset_combo.setCurrentIndex(self.presets_list.index(cur_preset))
+            self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+            form_layout.addRow("Preset:", self.preset_combo)
+
+            # Base URL
+            self.base_url_edit = QtWidgets.QLineEdit()
+            self.base_url_edit.setText(config.get("base_url", ""))
+            self.base_url_edit.setPlaceholderText("http://localhost:11434/v1")
+            form_layout.addRow("Base URL:", self.base_url_edit)
+
+            # Model Name
+            self.model_edit = QtWidgets.QLineEdit()
+            self.model_edit.setText(config.get("model", ""))
+            self.model_edit.setPlaceholderText("e.g. gemini-2.5-pro, deepseek-chat, llama3")
+            form_layout.addRow("Model Name:", self.model_edit)
+
+            # API Key row with show/hide toggle
+            self.api_key_edit = QtWidgets.QLineEdit()
+            self.api_key_edit.setText(config.get("api_key", ""))
+            self.api_key_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+            self.api_key_edit.setPlaceholderText("Leave empty for Ollama / LM Studio")
+
+            key_container = QtWidgets.QWidget()
+            key_layout = QtWidgets.QHBoxLayout(key_container)
+            key_layout.setContentsMargins(0, 0, 0, 0)
+            key_layout.addWidget(self.api_key_edit)
+            self.toggle_key_cb = QtWidgets.QCheckBox("Show")
+            self.toggle_key_cb.toggled.connect(self._toggle_key_visibility)
+            key_layout.addWidget(self.toggle_key_cb)
+            form_layout.addRow("API Key:", key_container)
+
+            # Batch Size
+            self.batch_size_spin = QtWidgets.QSpinBox()
+            self.batch_size_spin.setRange(1, 200)
+            self.batch_size_spin.setValue(int(config.get("batch_size", 40)))
+            self.batch_size_spin.setToolTip("Number of subroutines analyzed per prompt batch.")
+            form_layout.addRow("Batch Size:", self.batch_size_spin)
+
+            main_layout.addLayout(form_layout)
+
+            # Test connection row
+            test_container = QtWidgets.QWidget()
+            test_layout = QtWidgets.QHBoxLayout(test_container)
+            test_layout.setContentsMargins(0, 4, 0, 4)
+            self.test_btn = QtWidgets.QPushButton("Test Connection")
+            self.test_btn.clicked.connect(self._test_connection)
+            self.test_status = QtWidgets.QLabel("")
+            test_layout.addWidget(self.test_btn)
+            test_layout.addWidget(self.test_status)
+            test_layout.addStretch()
+            main_layout.addWidget(test_container)
+
+            # Dialog buttons (Save / Cancel)
+            btn_box = QtWidgets.QDialogButtonBox(
+                QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel
+            )
+            btn_box.accepted.connect(self.accept)
+            btn_box.rejected.connect(self.reject)
+            main_layout.addWidget(btn_box)
+
+        def _toggle_key_visibility(self, checked):
+            if checked:
+                self.api_key_edit.setEchoMode(QtWidgets.QLineEdit.Normal)
+            else:
+                self.api_key_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+
+        def _on_preset_changed(self, idx):
+            if 0 <= idx < len(self.presets_list):
+                p_name = self.presets_list[idx]
+                url = ENDPOINT_PRESETS.get(p_name, "")
+                if url:
+                    self.base_url_edit.setText(url)
+                cur_m = self.model_edit.text().strip()
+                known_defaults = {"", "llama3", "gemini-2.5-pro", "gemini-2.5-flash", "deepseek-chat", "gpt-4o-mini", "local-model"}
+                if cur_m in known_defaults:
+                    if "Gemini" in p_name:
+                        self.model_edit.setText("gemini-2.5-pro")
+                    elif "DeepSeek" in p_name:
+                        self.model_edit.setText("deepseek-chat")
+                    elif "OpenAI" in p_name:
+                        self.model_edit.setText("gpt-4o-mini")
+                    elif "Ollama" in p_name:
+                        self.model_edit.setText("llama3")
+                    elif "LM Studio" in p_name:
+                        self.model_edit.setText("local-model")
+
+        def _test_connection(self):
+            base_url = self.base_url_edit.text().strip()
+            api_key = self.api_key_edit.text().strip()
+            model = self.model_edit.text().strip()
+
+            if not base_url:
+                self.test_status.setStyleSheet("color: red;")
+                self.test_status.setText("Base URL cannot be empty.")
+                return
+
+            self.test_status.setStyleSheet("color: #0066cc;")
+            self.test_status.setText("Testing connection...")
+            self.test_btn.setEnabled(False)
+
+            def do_test():
+                err = None
+                try:
+                    messages = [{"role": "user", "content": "Respond with OK"}]
+                    resp = query_llm(base_url, api_key, model, messages, temperature=0.0)
+                    if not resp:
+                        err = "No response from endpoint."
+                except Exception as ex:
+                    err = str(ex)
+
+                def on_done():
+                    self.test_btn.setEnabled(True)
+                    if err:
+                        self.test_status.setStyleSheet("color: red;")
+                        self.test_status.setText(f"Failed: {err[:50]}")
+                    else:
+                        self.test_status.setStyleSheet("color: green; font-weight: bold;")
+                        self.test_status.setText("Connection successful!")
+
+                QtCore.QTimer.singleShot(0, on_done)
+
+            threading.Thread(target=do_test, daemon=True).start()
+
+        def get_values(self):
+            return {
+                "preset": self.preset_combo.currentText(),
+                "base_url": self.base_url_edit.text().strip(),
+                "model": self.model_edit.text().strip(),
+                "api_key": self.api_key_edit.text().strip(),
+                "batch_size": self.batch_size_spin.value(),
+            }
+
+
+class IdaFormSettingsDialog(ida_kernwin.Form):
+    """Fallback configuration dialog using native IDA Form."""
     def __init__(self, config: dict):
         self.config = config
         presets_list = list(ENDPOINT_PRESETS.keys())
@@ -258,38 +430,41 @@ class SettingsDialog(ida_kernwin.Form):
 
         ida_kernwin.Form.__init__(
             self,
-            r"""STARTITEM {id_preset}
+            r"""STARTITEM {id:id_preset}
 BUTTON YES Save
 BUTTON CANCEL Cancel
 BinaryLens Configuration
 
+{FormChangeCb}
 <#Quick-fill Base URL preset#Preset    :{id_preset}>
 <#OpenAI-compatible Base URL#Base URL  :{id_base_url}>
-<#Any model name (e.g. your local model or cloud model string)#Model Name:{id_model}>
-<#API Key (Leave empty for local runtimes like Ollama/LM Studio)#API Key   :{id_api_key}>
-<#Number of subroutines to send per batch request#Batch Size:{id_batch_size}>
+<#Any model identifier#Model Name:{id_model}>
+<#API Key (Leave empty for Ollama / LM Studio)#API Key   :{id_api_key}>
+<#Subroutines to send per batch request#Batch Size:{id_batch_size}>
 """,
             {
+                "FormChangeCb": ida_kernwin.Form.FormChangeCb(self.OnFormChange),
                 "id_preset": ida_kernwin.Form.DropdownListControl(
                     items=presets_list,
                     readonly=True,
                     selval=current_p_idx
                 ),
-                "id_base_url": ida_kernwin.Form.StringInput(value=config.get("base_url", ""), width=60),
-                "id_model": ida_kernwin.Form.StringInput(value=config.get("model", ""), width=60),
-                "id_api_key": ida_kernwin.Form.StringInput(value=config.get("api_key", ""), width=60),
-                "id_batch_size": ida_kernwin.Form.NumericInput(value=config.get("batch_size", 40), tp=ida_kernwin.Form.FT_DEC),
+                "id_base_url": ida_kernwin.Form.StringInput(value=config.get("base_url", ""), width=1024, swidth=50),
+                "id_model": ida_kernwin.Form.StringInput(value=config.get("model", ""), width=1024, swidth=50),
+                "id_api_key": ida_kernwin.Form.StringInput(value=config.get("api_key", ""), width=1024, swidth=50),
+                "id_batch_size": ida_kernwin.Form.NumericInput(value=int(config.get("batch_size", 40)), tp=ida_kernwin.Form.FT_DEC, width=10, swidth=10),
             }
         )
 
-    def OnDropdownChange(self, fid):
-        presets_list = list(ENDPOINT_PRESETS.keys())
-        sel_idx = self.id_preset.value
-        if 0 <= sel_idx < len(presets_list):
-            p_name = presets_list[sel_idx]
-            url = ENDPOINT_PRESETS[p_name]
-            if url:
-                self.SetControlValue(self.id_base_url, url)
+    def OnFormChange(self, fid):
+        if fid == self.id_preset.id:
+            sel_idx = self.GetControlValue(self.id_preset)
+            presets_list = list(ENDPOINT_PRESETS.keys())
+            if sel_idx is not None and 0 <= sel_idx < len(presets_list):
+                p_name = presets_list[sel_idx]
+                url = ENDPOINT_PRESETS.get(p_name, "")
+                if url:
+                    self.SetControlValue(self.id_base_url, url)
         return 1
 
 
@@ -381,7 +556,26 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         ida_kernwin.unregister_action("binarylens:explain_func")
 
     def show_settings(self):
-        dialog = SettingsDialog(self.config)
+        if HAS_QT:
+            try:
+                parent = None
+                try:
+                    parent = QtWidgets.QApplication.activeWindow()
+                except Exception:
+                    pass
+                dialog = QtSettingsDialog(self.config, parent=parent)
+                res = dialog.exec_() if hasattr(dialog, "exec_") else dialog.exec()
+                if res == QtWidgets.QDialog.Accepted:
+                    vals = dialog.get_values()
+                    self.config.update(vals)
+                    save_config(self.config)
+                    ida_kernwin.info(f"BinaryLens settings saved.\nModel: {self.config['model']}\nBase URL: {self.config['base_url']}")
+                return
+            except Exception as e:
+                ida_kernwin.msg(f"[BinaryLens] Qt dialog error, falling back to IDA form: {e}\n")
+
+        # Fallback to ida_kernwin.Form
+        dialog = IdaFormSettingsDialog(self.config)
         dialog.Compile()
         ok = dialog.Execute()
         if ok == 1:
