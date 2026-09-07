@@ -661,6 +661,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         self._unregister_actions()
 
     def _register_actions(self):
+        self._unregister_actions()
         # Action 1: Rename Subroutines
         rename_subs_desc = ida_kernwin.action_desc_t(
             "binarylens:rename_subs",
@@ -725,7 +726,11 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
     def _unregister_actions(self):
         if hasattr(self, "ui_hooks") and self.ui_hooks:
-            self.ui_hooks.unhook()
+            try:
+                self.ui_hooks.unhook()
+            except Exception:
+                pass
+            self.ui_hooks = None
         ida_kernwin.unregister_action("binarylens:rename_subs")
         ida_kernwin.unregister_action("binarylens:stop_analysis")
         ida_kernwin.unregister_action("binarylens:settings")
@@ -1110,3 +1115,9 @@ class _UIHooks(ida_kernwin.UI_Hooks):
 
 def PLUGIN_ENTRY():
     return BinaryLensPlugin()
+
+
+if __name__ == "__main__":
+    _plugin = PLUGIN_ENTRY()
+    _plugin.init()
+
