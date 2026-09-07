@@ -1,11 +1,18 @@
 {
+  "$schema": "https://hcli.docs.hex-rays.com/schemas/ida-plugin.json",
   "IDAMetadataDescriptorVersion": 1,
   "plugin": {
     "name": "BinaryLens",
     "entryPoint": "binarylens.py",
     "description": "An IDA plugin that uses language models to speed up binary analysis with batch subroutine renaming, variable inference, and explanations.",
     "version": "1.2.0",
-    "idaVersions": ">=8.0",
+    "idaVersions": [
+      "9.0",
+      "9.1",
+      "9.2",
+      "9.3",
+      "9.4"
+    ],
     "categories": [
       "api-scripting-and-automation",
       "collaboration-and-productivity",
@@ -14,6 +21,7 @@
     "authors": [
       {
         "name": "Lumice",
+        "email": "lumice@users.noreply.github.com",
         "url": "https://github.com/Lumice"
       }
     ],

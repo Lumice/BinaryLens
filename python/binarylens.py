@@ -48,6 +48,42 @@ except ImportError:
             except ImportError:
                 pass
 
+
+def post_ida_msg(text: str) -> None:
+    """Thread-safe dispatch for IDA console messages."""
+    def emit():
+        ida_kernwin.msg(text)
+        return 1
+    ida_kernwin.execute_sync(emit, ida_kernwin.MFF_FAST)
+
+
+def qt_enum(owner, scope: str, member: str, default: Any = None) -> Any:
+    """Seamlessly resolve Qt enums across PyQt5, PyQt6, PySide2, and PySide6."""
+    if owner is None:
+        return default
+    scoped = getattr(owner, scope, None)
+    if scoped is not None and hasattr(scoped, member):
+        return getattr(scoped, member)
+    if hasattr(owner, member):
+        return getattr(owner, member)
+    return default
+
+
+def get_func_content_hash(ea: int) -> str:
+    """Compute a fast hash of the function byte content to detect stale/concurrent modifications."""
+    f = ida_funcs.get_func(ea)
+    if not f:
+        return ""
+    size = f.end_ea - f.start_ea
+    if size <= 0 or size > 10 * 1024 * 1024:
+        return f"{f.start_ea}_{size}"
+    b = ida_bytes.get_bytes(f.start_ea, size)
+    if not b:
+        return f"{f.start_ea}_{size}"
+    import hashlib
+    return hashlib.sha256(b).hexdigest()[:16]
+
+
 # Default configuration
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "BinaryLens")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -129,9 +165,9 @@ Be concise, technical, and accurate.
 """
 
 def load_config() -> dict:
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    if os.path.exists(CONFIG_FILE):
-        try:
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 config = DEFAULT_CONFIG.copy()
@@ -139,18 +175,22 @@ def load_config() -> dict:
                 if not isinstance(config.get("hint_history"), list):
                     config["hint_history"] = []
                 return config
-        except Exception as e:
-            ida_kernwin.msg(f"[BinaryLens] Warning: Failed to load config: {e}\n")
+    except Exception as e:
+        post_ida_msg(f"[BinaryLens] Warning: Failed to load config: {e}\n")
     return DEFAULT_CONFIG.copy()
 
 def save_config(config: dict) -> bool:
-    os.makedirs(CONFIG_DIR, exist_ok=True)
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        tmp_file = CONFIG_FILE + f".tmp.{os.getpid()}"
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_file, CONFIG_FILE)
         return True
     except Exception as e:
-        ida_kernwin.msg(f"[BinaryLens] Error saving config: {e}\n")
+        post_ida_msg(f"[BinaryLens] Error saving config: {e}\n")
         return False
 
 def add_hint_to_history(config: dict, hint: str) -> None:
@@ -168,9 +208,13 @@ def add_hint_to_history(config: dict, hint: str) -> None:
 
 def sanitize_identifier(name: str) -> str:
     """Ensure a string is a valid C/IDA identifier."""
-    name = name.strip().strip('"').strip("'")
-    cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    if cleaned and cleaned[0].isdigit():
+    if not name:
+        return ""
+    name = name.strip().strip('"').strip("'").strip('`')
+    cleaned = re.sub(r'[^a-zA-Z0-9_]+', '_', name).strip('_')
+    if not cleaned:
+        return ""
+    if cleaned[0].isdigit():
         cleaned = "_" + cleaned
     return cleaned
 
@@ -256,20 +300,25 @@ def parse_model_response(raw_text: str) -> Tuple[str, Dict[str, str]]:
                 pass
 
     if data:
-        summary = data.get("summary", "")
+        cand_summary = data.get("summary", "")
+        summary = cand_summary.strip() if isinstance(cand_summary, str) else ""
         # Function mappings
         funcs = data.get("renamed_functions") or data.get("RenamedFunctions") or data.get("functions")
         if isinstance(funcs, dict):
             for k, v in funcs.items():
                 if isinstance(k, str) and isinstance(v, str):
-                    mapping[k.strip()] = sanitize_identifier(v)
+                    san = sanitize_identifier(v)
+                    if san:
+                        mapping[k.strip()] = san
 
         # Variable mappings
         vars_dict = data.get("renamed_variables") or data.get("RenamedLocals") or data.get("variables")
         if isinstance(vars_dict, dict):
             for k, v in vars_dict.items():
                 if isinstance(k, str) and isinstance(v, str):
-                    mapping[k.strip()] = sanitize_identifier(v)
+                    san = sanitize_identifier(v)
+                    if san:
+                        mapping[k.strip()] = san
 
         if mapping:
             return summary, mapping
@@ -301,20 +350,19 @@ def call_llm(
     user_prompt: str,
     config: dict,
     on_log=None,
-    raise_errors: bool = False
+    raise_errors: bool = False,
+    cancel_check=None
 ) -> Optional[str]:
-    """Sends a chat completion request to an OpenAI-compatible endpoint."""
     base_url = config.get("base_url", "").strip().rstrip("/")
-    if not base_url.startswith("http://") and not base_url.startswith("https://"):
-        base_url = "https://" + base_url
+    if not base_url:
+        if on_log:
+            on_log("[BinaryLens] Error: Base URL is empty. Configure it in Settings.\n")
+        return None
 
     endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
     model = config.get("model", "deepseek-v4-flash")
     api_key = config.get("api_key", "").strip()
     timeout = config.get("timeout_sec", 180)
-
-    if on_log:
-        on_log(f"[BinaryLens] Dispatching request to {endpoint} (Model: {model})...\n")
 
     payload = {
         "model": model,
@@ -329,9 +377,9 @@ def call_llm(
     if "deepseek" in model.lower():
         payload["max_tokens"] = 8192
 
-    # Reasoning effort (OpenCode Go, DeepSeek, OpenAI reasoning models)
+    # BL-011: Omit reasoning_effort when empty, "none", or "default"
     reasoning_effort = config.get("reasoning_effort", "none")
-    if reasoning_effort and reasoning_effort != "default":
+    if reasoning_effort and reasoning_effort not in ("", "none", "default"):
         payload["reasoning_effort"] = reasoning_effort
 
     body_bytes = json.dumps(payload).encode("utf-8")
@@ -349,53 +397,101 @@ def call_llm(
         req.add_header("Authorization", f"Bearer {api_key}")
 
     ctx = ssl.create_default_context()
-    t0 = time.time()
+    MAX_RETRIES = 2
+    MAX_RESP_BYTES = 5 * 1024 * 1024  # 5 MB ceiling (BL-011)
 
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-            elapsed = time.time() - t0
-            resp_body = resp.read().decode("utf-8")
-            data = json.loads(resp_body)
-            choices = data.get("choices", [])
-            if not choices:
-                if on_log:
-                    on_log(f"[BinaryLens] Warning: Provider returned empty choices array ({elapsed:.1f}s).\n")
-                return None
-            first_choice = choices[0]
-            msg = first_choice.get("message", {})
-            content = msg.get("content") or msg.get("reasoning_content") or ""
-            finish_reason = first_choice.get("finish_reason")
+    for attempt in range(MAX_RETRIES + 1):
+        if cancel_check and cancel_check():
+            return None
 
-            if not content:
-                if on_log:
-                    on_log(f"[BinaryLens] Warning: Empty content returned from model ({elapsed:.1f}s, finish_reason: {finish_reason}).\n")
-                return None
-            if on_log:
-                on_log(f"[BinaryLens] Response received in {elapsed:.1f}s.\n")
-            return content
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode("utf-8", errors="ignore")
+        if on_log and attempt == 0:
+            on_log(f"[BinaryLens] Dispatching request to {endpoint} (Model: {model})...\n")
+
+        t0 = time.time()
         try:
-            err_json = json.loads(err_msg)
-            if "error" in err_json:
-                err_val = err_json["error"]
-                if isinstance(err_val, dict) and "message" in err_val:
-                    err_msg = err_val["message"]
-                elif isinstance(err_val, str):
-                    err_msg = err_val
-        except Exception:
-            pass
-        if on_log:
-            on_log(f"[BinaryLens] HTTP Error {e.code}: {err_msg}\n")
-        if raise_errors:
-            raise RuntimeError(f"HTTP {e.code}: {err_msg}")
-        return None
-    except Exception as e:
-        if on_log:
-            on_log(f"[BinaryLens] Request failed: {e}\n")
-        if raise_errors:
-            raise
-        return None
+            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+                elapsed = time.time() - t0
+                resp_bytes = resp.read(MAX_RESP_BYTES)
+                resp_body = resp_bytes.decode("utf-8", errors="replace")
+                data = json.loads(resp_body)
+                choices = data.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    if on_log:
+                        on_log(f"[BinaryLens] Warning: Provider returned empty choices array ({elapsed:.1f}s).\n")
+                    return None
+                first_choice = choices[0]
+                if not isinstance(first_choice, dict):
+                    return None
+                msg = first_choice.get("message", {})
+                if not isinstance(msg, dict):
+                    return None
+                # BL-009: Strict content requirement - never fall back to reasoning_content!
+                content = msg.get("content")
+                finish_reason = first_choice.get("finish_reason")
+
+                if not isinstance(content, str) or not content.strip():
+                    if on_log:
+                        on_log(f"[BinaryLens] Warning: Empty content returned from model ({elapsed:.1f}s, finish_reason: {finish_reason}).\n")
+                    return None
+                if on_log:
+                    on_log(f"[BinaryLens] Response received in {elapsed:.1f}s.\n")
+                return content.strip()
+
+        except urllib.error.HTTPError as e:
+            elapsed = time.time() - t0
+            err_msg = e.read(64 * 1024).decode("utf-8", errors="ignore")
+            try:
+                err_json = json.loads(err_msg)
+                if "error" in err_json:
+                    err_val = err_json["error"]
+                    if isinstance(err_val, dict) and "message" in err_val:
+                        err_msg = err_val["message"]
+                    elif isinstance(err_val, str):
+                        err_msg = err_val
+            except Exception:
+                pass
+
+            # Retry on transient HTTP errors (429, 500, 502, 503, 504)
+            if e.code in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES:
+                retry_delay = 2.0 * (attempt + 1)
+                retry_after = e.headers.get("Retry-After") if hasattr(e, "headers") else None
+                if retry_after:
+                    try:
+                        retry_delay = max(retry_delay, min(float(retry_after), 30.0))
+                    except (ValueError, TypeError):
+                        pass
+                if on_log:
+                    on_log(f"[BinaryLens] HTTP {e.code} ({err_msg}). Retrying in {retry_delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})...\n")
+                time.sleep(retry_delay)
+                continue
+
+            if on_log:
+                on_log(f"[BinaryLens] HTTP Error {e.code}: {err_msg}\n")
+            if raise_errors:
+                raise RuntimeError(f"HTTP {e.code}: {err_msg}")
+            return None
+
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            elapsed = time.time() - t0
+            if attempt < MAX_RETRIES:
+                retry_delay = 2.0 * (attempt + 1)
+                if on_log:
+                    on_log(f"[BinaryLens] Network error ({e}). Retrying in {retry_delay:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})...\n")
+                time.sleep(retry_delay)
+                continue
+            if on_log:
+                on_log(f"[BinaryLens] Request failed: {e}\n")
+            if raise_errors:
+                raise
+            return None
+        except Exception as e:
+            if on_log:
+                on_log(f"[BinaryLens] Unexpected error: {e}\n")
+            if raise_errors:
+                raise
+            return None
+
+    return None
 
 
 if HAS_QT:
@@ -417,7 +513,9 @@ if HAS_QT:
             main_layout.addWidget(subtitle_label)
 
             form_layout = QtWidgets.QFormLayout()
-            form_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.ExpandingFieldsGrow)
+            growth = qt_enum(QtWidgets.QFormLayout, "FieldGrowthPolicy", "ExpandingFieldsGrow")
+            if growth is not None:
+                form_layout.setFieldGrowthPolicy(growth)
 
             # Presets dropdown
             self.preset_combo = QtWidgets.QComboBox()
@@ -442,8 +540,8 @@ if HAS_QT:
             form_layout.addRow("Model Name:", self.model_edit)
 
             # API Key row with show/hide toggle
-            self._echo_pwd = getattr(QtWidgets.QLineEdit.EchoMode, "Password", getattr(QtWidgets.QLineEdit, "Password", 2))
-            self._echo_norm = getattr(QtWidgets.QLineEdit.EchoMode, "Normal", getattr(QtWidgets.QLineEdit, "Normal", 0))
+            self._echo_pwd = qt_enum(QtWidgets.QLineEdit, "EchoMode", "Password", 2)
+            self._echo_norm = qt_enum(QtWidgets.QLineEdit, "EchoMode", "Normal", 0)
 
             self.api_key_edit = QtWidgets.QLineEdit()
             self.api_key_edit.setText(config.get("api_key", ""))
@@ -613,6 +711,7 @@ if HAS_QT:
         def __init__(self, total_batches: int, on_stop_cb, parent=None):
             super().__init__(parent)
             self.on_stop_cb = on_stop_cb
+            self._programmatic_close = False
             self.setWindowTitle("BinaryLens Progress")
             self.resize(380, 140)
 
@@ -635,7 +734,9 @@ if HAS_QT:
             btn_layout.addStretch()
 
             self.stop_btn = QtWidgets.QPushButton("Stop Analysis")
-            self.stop_btn.setCursor(QtCore.Qt.PointingHandCursor)
+            cursor_shape = qt_enum(QtCore.Qt, "CursorShape", "PointingHandCursor", getattr(QtCore.Qt, "ArrowCursor", None) if hasattr(QtCore, "Qt") else None)
+            if cursor_shape:
+                self.stop_btn.setCursor(cursor_shape)
             self.stop_btn.setStyleSheet("""
                 QPushButton {
                     padding: 6px 18px;
@@ -681,10 +782,11 @@ if HAS_QT:
                 self.stats_lbl.setText(f"Renamed: {renamed_count} functions")
 
         def mark_finished(self, total_renamed: int, aborted: bool = False):
+            self._programmatic_close = True
             self.close()
 
         def closeEvent(self, event):
-            if self.on_stop_cb:
+            if not self._programmatic_close and self.on_stop_cb:
                 self.on_stop_cb()
             event.accept()
 
@@ -713,7 +815,7 @@ if HAS_QT:
             form_layout = QtWidgets.QFormLayout()
             self.combo = QtWidgets.QComboBox()
             self.combo.setEditable(True)
-            no_insert = getattr(QtWidgets.QComboBox.InsertPolicy, "NoInsert", getattr(QtWidgets.QComboBox, "NoInsert", 0))
+            no_insert = qt_enum(QtWidgets.QComboBox, "InsertPolicy", "NoInsert", 0)
             self.combo.setInsertPolicy(no_insert)
 
             history = self.config.get("hint_history", [])
@@ -835,23 +937,27 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
     def __init__(self):
         super().__init__()
         self.config = load_config()
+        self._run_lock = threading.Lock()
+        self._run_id = 0
+        self._cancel = threading.Event()
         self.worker_thread: Optional[threading.Thread] = None
         self.is_running = False
         self.progress_dialog = None
 
     def init(self):
         if not ida_hexrays.init_hexrays_plugin():
-            ida_kernwin.msg("[BinaryLens] Hex-Rays decompiler not detected. Plugin disabled.\n")
+            post_ida_msg("[BinaryLens] Hex-Rays decompiler not detected. Plugin disabled.\n")
             return ida_idaapi.PLUGIN_SKIP
 
         self._register_actions()
-        ida_kernwin.msg("[BinaryLens] Loaded successfully. (Edit -> BinaryLens)\n")
+        post_ida_msg("[BinaryLens] Loaded successfully. (Edit -> BinaryLens)\n")
         return ida_idaapi.PLUGIN_KEEP
 
     def run(self, arg):
         self.show_settings()
 
     def term(self):
+        self.stop_analysis()
         self._unregister_actions()
 
     def _register_actions(self):
@@ -932,17 +1038,20 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         ida_kernwin.unregister_action("binarylens:explain_func")
 
     def stop_analysis(self):
-        if not self.is_running:
-            ida_kernwin.msg("[BinaryLens] No analysis is currently running.\n")
-            return
-        self.is_running = False
+        with self._run_lock:
+            if not self.is_running:
+                post_ida_msg("[BinaryLens] No analysis is currently running.\n")
+                return
+            self._cancel.set()
+            self._run_id += 1
+            self.is_running = False
         if getattr(self, "progress_dialog", None):
             try:
-                self.progress_dialog.close()
+                self.progress_dialog.mark_finished(0, aborted=True)
                 self.progress_dialog = None
             except Exception:
                 pass
-        ida_kernwin.msg("[BinaryLens] Stop requested. Analysis halted.\n")
+        post_ida_msg("[BinaryLens] Stop requested. Analysis halted and pending mutations fenced.\n")
 
     def show_settings(self):
         if HAS_QT:
@@ -954,7 +1063,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     pass
                 dialog = QtSettingsDialog(self.config, parent=parent)
                 res = dialog.exec() if hasattr(dialog, "exec") else dialog.exec_()
-                accepted_code = getattr(QtWidgets.QDialog.DialogCode, "Accepted", getattr(QtWidgets.QDialog, "Accepted", 1))
+                accepted_code = qt_enum(QtWidgets.QDialog, "DialogCode", "Accepted", 1)
                 if res == 1 or res == accepted_code:
                     vals = dialog.get_values()
                     self.config.update(vals)
@@ -962,7 +1071,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     ida_kernwin.info(f"BinaryLens settings saved.\nModel: {self.config['model']}\nBase URL: {self.config['base_url']}")
                 return
             except Exception as e:
-                ida_kernwin.msg(f"[BinaryLens] Qt dialog error, falling back to IDA form: {e}\n")
+                post_ida_msg(f"[BinaryLens] Qt dialog error, falling back to IDA form: {e}\n")
 
         # Fallback to ida_kernwin.Form
         dialog = IdaFormSettingsDialog(self.config)
@@ -981,22 +1090,25 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         dialog.Free()
 
     def rename_all_subs(self):
-        if self.is_running:
-            if HAS_QT:
-                res = QtWidgets.QMessageBox.question(
-                    None,
-                    "BinaryLens",
-                    "Subroutine analysis is currently in progress.\nDo you want to stop it?",
-                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-                    QtWidgets.QMessageBox.StandardButton.No
-                )
-                if res == QtWidgets.QMessageBox.StandardButton.Yes:
-                    self.stop_analysis()
-            else:
-                res = ida_kernwin.ask_yn(ida_kernwin.ASKBTN_NO, "BinaryLens analysis is already running. Do you want to stop it?")
-                if res == ida_kernwin.ASKBTN_YES:
-                    self.stop_analysis()
-            return
+        with self._run_lock:
+            if self.is_running:
+                if HAS_QT:
+                    btn_yes = qt_enum(QtWidgets.QMessageBox, "StandardButton", "Yes", 0x4000)
+                    btn_no = qt_enum(QtWidgets.QMessageBox, "StandardButton", "No", 0x10000)
+                    res = QtWidgets.QMessageBox.question(
+                        None,
+                        "BinaryLens",
+                        "Subroutine analysis is currently in progress.\nDo you want to stop it?",
+                        btn_yes | btn_no,
+                        btn_no
+                    )
+                    if res == btn_yes:
+                        self.stop_analysis()
+                else:
+                    res = ida_kernwin.ask_yn(ida_kernwin.ASKBTN_NO, "BinaryLens analysis is already running. Do you want to stop it?")
+                    if res == ida_kernwin.ASKBTN_YES:
+                        self.stop_analysis()
+                return
 
         user_hint = ""
         if HAS_QT:
@@ -1008,14 +1120,14 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     pass
                 dialog = QtTargetHintDialog(self.config, parent=parent)
                 res = dialog.exec() if hasattr(dialog, "exec") else dialog.exec_()
-                accepted_code = getattr(QtWidgets.QDialog.DialogCode, "Accepted", getattr(QtWidgets.QDialog, "Accepted", 1))
+                accepted_code = qt_enum(QtWidgets.QDialog, "DialogCode", "Accepted", 1)
                 if res != 1 and res != accepted_code:
                     return
                 user_hint = dialog.get_hint()
                 if user_hint:
                     add_hint_to_history(self.config, user_hint)
             except Exception as e:
-                ida_kernwin.msg(f"[BinaryLens] Hint dialog error, falling back: {e}\n")
+                post_ida_msg(f"[BinaryLens] Hint dialog error, falling back: {e}\n")
                 user_hint = ida_kernwin.ask_str("", -1, "(Optional) Provide background info or target hints for the binary:")
                 if user_hint is None:
                     return
@@ -1042,14 +1154,17 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 targets.append((f.start_ea, name))
 
         if not targets:
-            ida_kernwin.msg("[BinaryLens] No sub_* functions found to rename.\n")
+            post_ida_msg("[BinaryLens] No sub_* functions found to rename.\n")
             return
 
-        ida_kernwin.msg(f"\n[BinaryLens] === Starting Subroutine Analysis ===\n")
-        ida_kernwin.msg(f"[BinaryLens] Found {len(targets)} candidate subroutines.\n")
+        post_ida_msg(f"\n[BinaryLens] === Starting Subroutine Analysis ===\n")
+        post_ida_msg(f"[BinaryLens] Found {len(targets)} candidate subroutines.\n")
 
-        batch_size = max(1, int(self.config.get("batch_size", 40)))
-        total_batches = (len(targets) + batch_size - 1) // batch_size
+        with self._run_lock:
+            self._run_id += 1
+            run_id = self._run_id
+            self._cancel.clear()
+            self.is_running = True
 
         if HAS_QT:
             try:
@@ -1058,167 +1173,177 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     parent = QtWidgets.QApplication.activeWindow()
                 except Exception:
                     pass
-                self.progress_dialog = BinaryLensProgressDialog(total_batches, on_stop_cb=self.stop_analysis, parent=parent)
+                self.progress_dialog = BinaryLensProgressDialog(len(targets), on_stop_cb=self.stop_analysis, parent=parent)
                 self.progress_dialog.show()
             except Exception:
                 self.progress_dialog = None
 
         self.worker_thread = threading.Thread(
             target=self._worker_rename_subs,
-            args=(targets, user_hint),
+            args=(targets, user_hint, run_id),
             daemon=True
         )
         self.worker_thread.start()
 
-    def _worker_rename_subs(self, targets: List[Tuple[int, str]], user_hint: str):
-        self.is_running = True
+    def _worker_rename_subs(self, targets: List[Tuple[int, str]], user_hint: str, run_id: int):
         start_time = time.time()
         try:
-            batch_size = max(1, int(self.config.get("batch_size", 40)))
+            batch_size = max(1, int(self.config.get("batch_size", 20)))
             total_renamed = 0
-            total_batches = (len(targets) + batch_size - 1) // batch_size
-            consecutive_failures = 0
             decomp_flags = ida_hexrays.DECOMP_NO_WAIT | ida_hexrays.DECOMP_WARNINGS
+            max_func_size_kb = int(self.config.get("max_func_size_kb", 12))
+            max_func_bytes = max_func_size_kb * 1024 if max_func_size_kb > 0 else 0
+            MAX_BATCH_PROMPT_CHARS = 120000
 
-            for batch_start in range(0, len(targets), batch_size):
-                if not self.is_running:
-                    ida_kernwin.msg("[BinaryLens] Analysis cancelled by user.\n")
+            pending_queue = list(targets)
+            batch_num = 0
+            total_targets = len(targets)
+            consecutive_failures = 0
+
+            while pending_queue:
+                if self._cancel.is_set() or run_id != self._run_id:
                     break
 
-                batch = targets[batch_start:batch_start + batch_size]
-                batch_num = (batch_start // batch_size) + 1
-                ida_kernwin.msg(f"[BinaryLens] Processing batch {batch_num}/{total_batches} ({len(batch)} functions)...\n")
-
-                cur_elapsed = time.time() - start_time
-                def sync_update_batch():
-                    if getattr(self, "progress_dialog", None):
-                        self.progress_dialog.update_progress(batch_num, total_batches, total_renamed, cur_elapsed)
-                    return 1
-                ida_kernwin.execute_sync(sync_update_batch, ida_kernwin.MFF_FAST)
-
-                # Decompile functions individually on main thread with MFF_READ to keep UI fluid
+                batch_num += 1
+                batch: List[Tuple[int, str]] = []
                 decompiled_chunks: List[str] = []
-                total_in_batch = len(batch)
-                model_name = self.config.get("model", "model")
-                max_func_size_kb = int(self.config.get("max_func_size_kb", 12))
-                max_func_bytes = max_func_size_kb * 1024 if max_func_size_kb > 0 else 0
+                accumulated_chars = 0
 
-                for idx, (ea, name) in enumerate(batch):
-                    if not self.is_running:
+                while pending_queue and len(batch) < batch_size:
+                    if self._cancel.is_set() or run_id != self._run_id:
                         break
 
-                    # Update live status on the progress dialog
+                    ea, name = pending_queue.pop(0)
+
+                    processed_so_far = total_targets - len(pending_queue)
+                    cur_elapsed = time.time() - start_time
                     def sync_status():
                         if getattr(self, "progress_dialog", None):
-                            self.progress_dialog.status_lbl.setText(
-                                f"Batch {batch_num}/{total_batches}: Decompiling {idx + 1}/{total_in_batch} ({name})..."
+                            self.progress_dialog.update_progress(
+                                processed_so_far, total_targets, total_renamed, cur_elapsed
                             )
-                        if HAS_QT:
-                            try:
-                                QtWidgets.QApplication.processEvents()
-                            except Exception:
-                                pass
+                            self.progress_dialog.status_lbl.setText(
+                                f"Batch {batch_num}: Decompiling {name} ({processed_so_far}/{total_targets})..."
+                            )
                         return 1
-
                     ida_kernwin.execute_sync(sync_status, ida_kernwin.MFF_FAST)
 
-                    # Decompile single function
+                    chunk_res: List[str] = []
                     def decompile_single():
                         f = ida_funcs.get_func(ea)
                         if not f:
                             return 1
-                        # Skip pathological monster functions (e.g. unrolled 23 KB tables with 2,000+ variables)
                         f_size = f.size()
                         if max_func_bytes > 0 and f_size > max_func_bytes:
-                            ida_kernwin.msg(f"[BinaryLens] Skipping {name} at 0x{ea:X}: {f_size / 1024:.1f} KB exceeds {max_func_size_kb} KB batch limit.\n")
+                            post_ida_msg(f"[BinaryLens] Skipping {name} at 0x{ea:X}: {f_size / 1024:.1f} KB exceeds {max_func_size_kb} KB batch limit.\n")
                             return 1
                         try:
                             cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
                             if cfunc:
                                 lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
-                                decompiled_chunks.append(truncate_pseudocode(lines, max_lines=150))
+                                chunk_res.append(truncate_pseudocode(lines, max_lines=150))
                         except Exception:
                             pass
-                        if HAS_QT:
-                            try:
-                                QtWidgets.QApplication.processEvents()
-                            except Exception:
-                                pass
                         return 1
 
-                    ida_kernwin.execute_sync(decompile_single, ida_kernwin.MFF_READ)
+                    sync_res = ida_kernwin.execute_sync(decompile_single, ida_kernwin.MFF_WRITE)
+                    if sync_res < 0:
+                        post_ida_msg(f"[BinaryLens] Warning: IDA rejected sync decompilation for {name}.\n")
+                        continue
 
-                if not self.is_running:
-                    ida_kernwin.msg("[BinaryLens] Analysis cancelled by user.\n")
+                    if chunk_res:
+                        chunk_text = chunk_res[0]
+                        chunk_len = len(chunk_text)
+                        if batch and (accumulated_chars + chunk_len > MAX_BATCH_PROMPT_CHARS):
+                            pending_queue.insert(0, (ea, name))
+                            break
+                        batch.append((ea, name))
+                        decompiled_chunks.append(chunk_text)
+                        accumulated_chars += chunk_len
+
+                if not batch:
+                    continue
+
+                if self._cancel.is_set() or run_id != self._run_id:
                     break
 
-                if not decompiled_chunks:
-                    ida_kernwin.msg(f"[BinaryLens] Batch {batch_num}/{total_batches}: No functions could be decompiled, skipping.\n")
-                    time.sleep(0.5)
-                    continue
+                post_ida_msg(f"[BinaryLens] Processing batch {batch_num} ({len(batch)} functions)...\n")
 
                 user_prompt = ""
                 if user_hint:
                     user_prompt += f"User context / hints: {user_hint}\n\n"
                 user_prompt += "Decompiled Functions:\n\n" + "\n\n/* ------------------ */\n\n".join(decompiled_chunks)
 
-                # Cap prompt size cleanly at function boundary to prevent exceeding model context length
-                if len(user_prompt) > 300000:
-                    sep = "\n\n/* ------------------ */\n\n"
-                    cut_idx = user_prompt.rfind(sep, 0, 300000)
-                    if cut_idx > 0:
-                        user_prompt = user_prompt[:cut_idx] + "\n\n// ... [Remaining batch functions truncated for length safety] ...\n"
-                    else:
-                        user_prompt = user_prompt[:300000] + "\n\n// ... [Remaining batch content truncated for length safety] ...\n"
+                submitted = {n: a for a, n in batch}
+                submitted_hashes = {a: get_func_content_hash(a) for a, n in batch}
 
                 def sync_query_status():
                     if getattr(self, "progress_dialog", None):
                         self.progress_dialog.status_lbl.setText(
-                            f"Batch {batch_num}/{total_batches}: Querying {model_name}..."
+                            f"Batch {batch_num}: Querying {self.config.get('model', 'model')}..."
                         )
                     return 1
-
                 ida_kernwin.execute_sync(sync_query_status, ida_kernwin.MFF_FAST)
 
                 raw_resp = call_llm(
                     SUB_REN_SYS_PROMPT,
                     user_prompt,
                     self.config,
-                    on_log=ida_kernwin.msg
+                    on_log=post_ida_msg,
+                    cancel_check=lambda: (self._cancel.is_set() or run_id != self._run_id)
                 )
 
+                if self._cancel.is_set() or run_id != self._run_id:
+                    post_ida_msg("[BinaryLens] Analysis cancelled by user. Fencing pending batch mutations.\n")
+                    break
+
                 if not raw_resp:
-                    ida_kernwin.msg(f"[BinaryLens] Batch {batch_num}/{total_batches}: Failed to get response from model.\n")
                     consecutive_failures += 1
+                    post_ida_msg(f"[BinaryLens] Batch {batch_num}: Failed to get response from model.\n")
                     if consecutive_failures >= 3:
-                        ida_kernwin.msg("[BinaryLens] Halting analysis: 3 consecutive batches failed. Check your API key or model settings.\n")
-                        self.is_running = False
+                        post_ida_msg("[BinaryLens] Halting analysis: 3 consecutive batches failed. Check API key or settings.\n")
                         break
                     time.sleep(1.5)
                     continue
 
                 consecutive_failures = 0
-
                 summary, renames = parse_model_response(raw_resp)
                 if summary:
-                    ida_kernwin.msg(f"[BinaryLens] Component Summary: {summary}\n")
+                    post_ida_msg(f"[BinaryLens] Component Summary: {summary}\n")
 
                 if not renames:
-                    ida_kernwin.msg(f"[BinaryLens] Batch {batch_num}/{total_batches}: No renames returned by model.\n")
+                    post_ida_msg(f"[BinaryLens] Batch {batch_num}: No valid renames returned by model.\n")
                     continue
 
                 def apply_batch():
                     nonlocal total_renamed
+                    if self._cancel.is_set() or run_id != self._run_id:
+                        return 0
                     for orig_name, new_name in renames.items():
-                        ea = ida_name.get_name_ea(ida_idaapi.BADADDR, orig_name)
-                        if ea != ida_idaapi.BADADDR and new_name and new_name != orig_name:
-                            if ida_name.set_name(ea, new_name, ida_name.SN_NOWARN | ida_name.SN_FORCE):
-                                total_renamed += 1
-                                ida_kernwin.msg(f"  [+] Renamed {orig_name} -> {new_name}\n")
-                                if summary:
-                                    pfn = ida_funcs.get_func(ea)
-                                    if pfn and not ida_funcs.get_func_cmt(pfn, False):
-                                        ida_funcs.set_func_cmt(pfn, f"Component: {summary}", False)
+                        if self._cancel.is_set() or run_id != self._run_id:
+                            return 0
+                        # BL-002: Verify symbol is strictly in the submitted batch
+                        expected_ea = submitted.get(orig_name)
+                        if expected_ea is None:
+                            continue
+                        cur_ea = ida_name.get_name_ea(ida_idaapi.BADADDR, orig_name)
+                        if cur_ea != expected_ea:
+                            continue
+                        if get_func_content_hash(expected_ea) != submitted_hashes.get(expected_ea):
+                            continue
+                        if not new_name or new_name == orig_name:
+                            continue
+                        clean_name = sanitize_identifier(new_name)
+                        if not clean_name:
+                            continue
+                        if ida_name.set_name(expected_ea, clean_name, ida_name.SN_NOWARN):
+                            actual_name = ida_name.get_name(expected_ea)
+                            total_renamed += 1
+                            post_ida_msg(f"  [+] Renamed {orig_name} -> {actual_name}\n")
+                            if summary:
+                                pfn = ida_funcs.get_func(expected_ea)
+                                if pfn and not ida_funcs.get_func_cmt(pfn, False):
+                                    ida_funcs.set_func_cmt(pfn, f"Component: {summary}", False)
                     return 1
 
                 ida_kernwin.execute_sync(apply_batch, ida_kernwin.MFF_WRITE)
@@ -1226,7 +1351,8 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 cur_elapsed = time.time() - start_time
                 def sync_update_count():
                     if getattr(self, "progress_dialog", None):
-                        self.progress_dialog.update_progress(batch_num, total_batches, total_renamed, cur_elapsed)
+                        processed_so_far = total_targets - len(pending_queue)
+                        self.progress_dialog.update_progress(processed_so_far, total_targets, total_renamed, cur_elapsed)
                     return 1
                 ida_kernwin.execute_sync(sync_update_count, ida_kernwin.MFF_FAST)
 
@@ -1240,16 +1366,16 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             else:
                 elapsed_str = f"{total_time:.1f}s"
 
-            if not self.is_running:
+            if self._cancel.is_set() or run_id != self._run_id:
                 msg_str = f"BinaryLens: Analysis stopped by user. Successfully renamed {total_renamed} functions in {elapsed_str}."
             else:
                 msg_str = f"BinaryLens: Analysis complete! Successfully renamed {total_renamed} functions in {elapsed_str}."
-            ida_kernwin.msg(f"\n[BinaryLens] {msg_str}\n")
+            post_ida_msg(f"\n[BinaryLens] {msg_str}\n")
 
             def notify_done():
                 if getattr(self, "progress_dialog", None):
                     try:
-                        self.progress_dialog.mark_finished(total_renamed, aborted=(not self.is_running))
+                        self.progress_dialog.mark_finished(total_renamed, aborted=(self._cancel.is_set() or run_id != self._run_id))
                     except Exception:
                         pass
                 return 1
@@ -1257,9 +1383,11 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             ida_kernwin.execute_sync(notify_done, ida_kernwin.MFF_FAST)
 
         except Exception as e:
-            ida_kernwin.msg(f"[BinaryLens] Error during analysis: {e}\n")
+            post_ida_msg(f"[BinaryLens] Error during analysis: {e}\n")
         finally:
-            self.is_running = False
+            with self._run_lock:
+                if run_id == self._run_id:
+                    self.is_running = False
 
     def rename_current_function_vars(self):
         vdui = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_widget())
@@ -1272,29 +1400,39 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
         code_str = truncate_pseudocode(lines, max_lines=300)
 
+        with self._run_lock:
+            self._run_id += 1
+            run_id = self._run_id
+
         threading.Thread(
             target=self._worker_rename_vars,
-            args=(entry_ea, code_str),
+            args=(entry_ea, code_str, run_id),
             daemon=True
         ).start()
 
-    def _worker_rename_vars(self, func_ea: int, code_str: str):
+    def _worker_rename_vars(self, func_ea: int, code_str: str, run_id: int):
         start_time = time.time()
-        ida_kernwin.msg(f"[BinaryLens] Analyzing variables for function at 0x{func_ea:X}...\n")
+        post_ida_msg(f"[BinaryLens] Analyzing variables for function at 0x{func_ea:X}...\n")
         raw_resp = call_llm(
             VAR_REN_SYS_PROMPT,
             code_str,
             self.config,
-            on_log=ida_kernwin.msg
+            on_log=post_ida_msg,
+            cancel_check=lambda: (self._cancel.is_set() or run_id != self._run_id)
         )
 
+        if self._cancel.is_set() or run_id != self._run_id:
+            return
+
         if not raw_resp:
-            ida_kernwin.msg("[BinaryLens] Failed to get response from model for variable renaming.\n")
+            post_ida_msg("[BinaryLens] Failed to get response from model for variable renaming.\n")
             return
 
         summary, renames = parse_model_response(raw_resp)
 
         def apply_var_renames():
+            if self._cancel.is_set() or run_id != self._run_id:
+                return 0
             vdui = ida_hexrays.open_pseudocode(func_ea, ida_hexrays.OPF_REUSE)
             if not vdui or not vdui.cfunc:
                 return 0
@@ -1306,10 +1444,10 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             for lvar in lvars:
                 var_name = lvar.name
                 if var_name in renames and renames[var_name] != var_name:
-                    new_name = renames[var_name]
-                    if vdui.rename_lvar(lvar, new_name, True):
+                    new_name = sanitize_identifier(renames[var_name])
+                    if new_name and vdui.rename_lvar(lvar, new_name, True):
                         renamed_count += 1
-                        ida_kernwin.msg(f"  [+] Renamed variable {var_name} -> {new_name}\n")
+                        post_ida_msg(f"  [+] Renamed variable {var_name} -> {new_name}\n")
 
             if summary:
                 pfn = ida_funcs.get_func(func_ea)
@@ -1320,7 +1458,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
             vdui.refresh_view(True)
             elapsed = time.time() - start_time
-            ida_kernwin.msg(f"[BinaryLens] Renamed {renamed_count} variables in {elapsed:.2f}s.\n")
+            post_ida_msg(f"[BinaryLens] Renamed {renamed_count} variables in {elapsed:.2f}s.\n")
             return 1
 
         ida_kernwin.execute_sync(apply_var_renames, ida_kernwin.MFF_WRITE)
@@ -1335,15 +1473,27 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         code_str = truncate_pseudocode(lines, max_lines=400)
         func_name = ida_funcs.get_func_name(vdui.cfunc.entry_ea)
 
+        with self._run_lock:
+            self._run_id += 1
+            run_id = self._run_id
+
         def worker():
             start_time = time.time()
-            ida_kernwin.msg(f"[BinaryLens] Generating explanation for {func_name}...\n")
-            resp = call_llm(EXPLAIN_SYS_PROMPT, code_str, self.config, on_log=ida_kernwin.msg)
+            post_ida_msg(f"[BinaryLens] Generating explanation for {func_name}...\n")
+            resp = call_llm(
+                EXPLAIN_SYS_PROMPT,
+                code_str,
+                self.config,
+                on_log=post_ida_msg,
+                cancel_check=lambda: (self._cancel.is_set() or run_id != self._run_id)
+            )
             elapsed = time.time() - start_time
+            if self._cancel.is_set() or run_id != self._run_id:
+                return
             if resp:
-                ida_kernwin.msg(f"\n========== BinaryLens: Explanation for {func_name} (completed in {elapsed:.2f}s) ==========\n\n{resp}\n\n============================================================\n")
+                post_ida_msg(f"\n========== BinaryLens: Explanation for {func_name} (completed in {elapsed:.2f}s) ==========\n\n{resp}\n\n============================================================\n")
             else:
-                ida_kernwin.msg(f"[BinaryLens] Failed to generate explanation for {func_name} (after {elapsed:.2f}s).\n")
+                post_ida_msg(f"[BinaryLens] Failed to generate explanation for {func_name} (after {elapsed:.2f}s).\n")
 
         threading.Thread(target=worker, daemon=True).start()
 

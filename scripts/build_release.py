@@ -26,10 +26,15 @@ def build_release():
     readme_path = os.path.join(root_dir, "README.md")
     license_path = os.path.join(root_dir, "LICENSE")
 
+    required = [manifest_path, source_plugin, readme_path, license_path]
+    missing = [path for path in required if not os.path.isfile(path)]
+    if missing:
+        raise FileNotFoundError(f"Required release files missing: {missing}")
+
+    entry_point = manifest.get("plugin", {}).get("entryPoint", "binarylens.py")
     files_to_pack = [
         (manifest_path, "ida-plugin.json"),
-        (source_plugin, "binarylens.py"),
-        (source_plugin, "plugins/binarylens.py"),
+        (source_plugin, entry_point),
         (readme_path, "README.md"),
         (license_path, "LICENSE"),
     ]
@@ -37,11 +42,8 @@ def build_release():
     print(f"Building BinaryLens v{version} release package...")
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for src, arcname in files_to_pack:
-            if os.path.exists(src):
-                zf.write(src, arcname)
-                print(f"  [+] Added: {arcname}")
-            else:
-                print(f"  [!] Warning: Missing {src}")
+            zf.write(src, arcname)
+            print(f"  [+] Added: {arcname}")
 
     size_kb = os.path.getsize(archive_path) / 1024.0
     print(f"\nRelease package created successfully:")

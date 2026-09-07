@@ -347,7 +347,7 @@ public:
         std::string renamed_count = "Successfully renamed " + std::to_string(renamed_sub_count) + " subrutines.\n\n";
         std::string final_summary = renamed_count + "Binary Analysis Summary:\n\n" + std::string(bin_summary) + "\n";
 
-        LogMessage(LOG_PATH, 2, WrapText(final_summary, 120).c_str());
+        LogMessage(LOG_PATH, 2, "%s", WrapText(final_summary, 120).c_str());
 
         DeleteFileA(temp_file_path);
 

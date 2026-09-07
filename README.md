@@ -56,7 +56,7 @@ hcli plugin install BinaryLens-v1.2.0.zip
 
 #### Option B: Manual Drop-in (IDA 8.x and 9.x)
 You do not need a C++ compiler or external DLL files.
-1. Copy `python/binarylens.py` into your IDA plugins directory:
+1. Copy `binarylens.py` (from the release archive root, or `python/binarylens.py` if building from source) into your IDA plugins directory:
    * Windows: `%APPDATA%\Hex-Rays\IDA Pro\plugins\`
    * Linux / macOS: `~/.idapro/plugins/`
 2. Start IDA Pro.
