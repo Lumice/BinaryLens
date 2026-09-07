@@ -420,43 +420,34 @@ bool RenameAllSubs() {
 
         ThreadLogMessage(LOG_PATH, 1, "[BinaryLens] Using model: %s\n", model_to_use.c_str());
 
-        if (ContainsSubstring(model_to_use, "gemini")) {
-            if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "gemini_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3,
-                    "API key not found for Gemini. Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit / BinaryLens / Select Model / Gemini / Set Gemini API key.\n"
-                );
-                sub_rename_end = true;
-                sub_ren_pass_count = 0;
-                return;
+        // Resolve API key
+        if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "api_key", api_key) || api_key.empty()) {
+            if (ContainsSubstring(model_to_use, "gemini")) {
+                ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "gemini_api_key", api_key);
+            }
+            else if (ContainsSubstring(model_to_use, "deepseek")) {
+                ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "deepseek_api_key", api_key);
+            }
+            else if (ContainsSubstring(model_to_use, "gpt") || ContainsSubstring(model_to_use, "o1") || ContainsSubstring(model_to_use, "o3")) {
+                ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "openai_api_key", api_key);
+            }
+            else {
+                ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "custom_api_key", api_key);
             }
         }
-        else if (ContainsSubstring(model_to_use, "deepseek")) {
-            if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "deepseek_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3,
-                    "API key not found for DeepSeek. Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/Deepseek/Set DeepSeek API key.\n"
-                );
-                sub_rename_end = true;
-                sub_ren_pass_count = 0;
-                return;
+
+        // Resolve Base URL if not explicitly set
+        if (custom_base_url.empty()) {
+            if (ContainsSubstring(model_to_use, "gemini")) {
+                custom_base_url = "https://generativelanguage.googleapis.com/v1beta/openai";
             }
-        }
-        else if (ContainsSubstring(model_to_use, "gpt") || ContainsSubstring(model_to_use, "o1") || ContainsSubstring(model_to_use, "o3")) {
-            if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "openai_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3,
-                    "API key not found for OpenAI. Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/OpenAI/Set OpenAI API key.\n"
-                );
-                sub_rename_end = true;
-                sub_ren_pass_count = 0;
-                return;
+            else if (ContainsSubstring(model_to_use, "deepseek")) {
+                custom_base_url = "https://api.deepseek.com/v1";
             }
-        }
-        else {
-            // Custom or Local model (Ollama / OpenRouter / etc.)
-            ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "custom_api_key", api_key);
-            if (custom_base_url.empty()) {
+            else if (ContainsSubstring(model_to_use, "gpt") || ContainsSubstring(model_to_use, "o1") || ContainsSubstring(model_to_use, "o3")) {
+                custom_base_url = "https://api.openai.com/v1";
+            }
+            else {
                 custom_base_url = "http://localhost:11434/v1";
                 ThreadLogMessage(LOG_PATH, 1, "[BinaryLens] Using default local base URL: %s\n", custom_base_url.c_str());
             }
@@ -643,37 +634,34 @@ bool RenameVariables(TWidget* t_widget) {
 
         ThreadLogMessage(LOG_PATH, 1, "[BinaryLens] Using model: %s\n", model_to_use.c_str());
 
-        if (ContainsSubstring(model_to_use, "gemini")) {
-            if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "gemini_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3, "API key not found for Gemini. Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/Gemini/Set Gemini API key.\n"
-                );
-                var_rename_end = true;
-                return;
+        // Resolve API key
+        if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "api_key", api_key) || api_key.empty()) {
+            if (ContainsSubstring(model_to_use, "gemini")) {
+                ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "gemini_api_key", api_key);
+            }
+            else if (ContainsSubstring(model_to_use, "deepseek")) {
+                ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "deepseek_api_key", api_key);
+            }
+            else if (ContainsSubstring(model_to_use, "gpt") || ContainsSubstring(model_to_use, "o1") || ContainsSubstring(model_to_use, "o3")) {
+                ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "openai_api_key", api_key);
+            }
+            else {
+                ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "custom_api_key", api_key);
             }
         }
-        else if (ContainsSubstring(model_to_use, "deepseek")) {
-            if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "deepseek_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3, "API key not found for DeepSeek. Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/deepseek/Set DeepSeek API key.\n"
-                );
-                var_rename_end = true;
-                return;
+
+        // Resolve Base URL if not explicitly set
+        if (custom_base_url.empty()) {
+            if (ContainsSubstring(model_to_use, "gemini")) {
+                custom_base_url = "https://generativelanguage.googleapis.com/v1beta/openai";
             }
-        }
-        else if (ContainsSubstring(model_to_use, "gpt") || ContainsSubstring(model_to_use, "o1") || ContainsSubstring(model_to_use, "o3")) {
-            if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "openai_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3, "API key not found for OpenAI. Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/OpenAI/Set OpenAI API key.\n"
-                );
-                var_rename_end = true;
-                return;
+            else if (ContainsSubstring(model_to_use, "deepseek")) {
+                custom_base_url = "https://api.deepseek.com/v1";
             }
-        }
-        else {
-            // Custom or Local model (Ollama / OpenRouter / etc.)
-            ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "custom_api_key", api_key);
-            if (custom_base_url.empty()) {
+            else if (ContainsSubstring(model_to_use, "gpt") || ContainsSubstring(model_to_use, "o1") || ContainsSubstring(model_to_use, "o3")) {
+                custom_base_url = "https://api.openai.com/v1";
+            }
+            else {
                 custom_base_url = "http://localhost:11434/v1";
                 ThreadLogMessage(LOG_PATH, 1, "[BinaryLens] Using default local base URL: %s\n", custom_base_url.c_str());
             }

@@ -45,22 +45,22 @@ bool HandleAnalysisActions(const char* action_name) {
 
 bool HandleModelActions(const char* action_name) {
     const char* sub_key = "SOFTWARE\\BinaryLensPlugin";
-    if (strcmp(action_name, "custom_model_input") == 0) {
+    if (strcmp(action_name, "set_model") == 0) {
         qstring cur_val;
         std::string existing;
         if (ReadRegistryData(sub_key, "model_to_use", existing)) {
             cur_val = existing.c_str();
         }
-        bool ok = ask_str(&cur_val, 0, "Enter Model Name (e.g. qwen2.5-coder:32b, deepseek-coder-v2, claude-3-7-sonnet):");
+        bool ok = ask_str(&cur_val, 0, "Enter Model Identifier (any model supported by your OpenAI-compatible endpoint):");
         if (ok && !cur_val.empty()) {
             std::string s = cur_val.c_str();
             TrimStr(s);
             WriteRegistryData(sub_key, "model_to_use", s.c_str());
-            info("BinaryLens: Model set to '%s'\n", s.c_str());
+            info("BinaryLens: Active model set to '%s'\n", s.c_str());
         }
         return true;
     }
-    if (strcmp(action_name, "custom_base_url_input") == 0) {
+    if (strcmp(action_name, "set_base_url") == 0) {
         qstring cur_val;
         std::string existing;
         if (ReadRegistryData(sub_key, "custom_base_url", existing)) {
@@ -69,7 +69,7 @@ bool HandleModelActions(const char* action_name) {
         else {
             cur_val = "http://localhost:11434/v1";
         }
-        bool ok = ask_str(&cur_val, 0, "Enter API Base URL (e.g. http://localhost:11434/v1, https://openrouter.ai/api/v1):");
+        bool ok = ask_str(&cur_val, 0, "Enter API Base URL (e.g. http://localhost:11434/v1, https://api.openai.com/v1):");
         if (ok) {
             std::string s = cur_val.c_str();
             TrimStr(s);
@@ -78,6 +78,38 @@ bool HandleModelActions(const char* action_name) {
         }
         return true;
     }
+    // Presets
+    if (strcmp(action_name, "preset_ollama") == 0) {
+        WriteRegistryData(sub_key, "custom_base_url", "http://localhost:11434/v1");
+        info("BinaryLens: Base URL set to Ollama (http://localhost:11434/v1)\n");
+        return true;
+    }
+    if (strcmp(action_name, "preset_lmstudio") == 0) {
+        WriteRegistryData(sub_key, "custom_base_url", "http://localhost:1234/v1");
+        info("BinaryLens: Base URL set to LM Studio (http://localhost:1234/v1)\n");
+        return true;
+    }
+    if (strcmp(action_name, "preset_openai") == 0) {
+        WriteRegistryData(sub_key, "custom_base_url", "https://api.openai.com/v1");
+        info("BinaryLens: Base URL set to OpenAI (https://api.openai.com/v1)\n");
+        return true;
+    }
+    if (strcmp(action_name, "preset_gemini") == 0) {
+        WriteRegistryData(sub_key, "custom_base_url", "https://generativelanguage.googleapis.com/v1beta/openai");
+        info("BinaryLens: Base URL set to Google Gemini\n");
+        return true;
+    }
+    if (strcmp(action_name, "preset_deepseek") == 0) {
+        WriteRegistryData(sub_key, "custom_base_url", "https://api.deepseek.com/v1");
+        info("BinaryLens: Base URL set to DeepSeek\n");
+        return true;
+    }
+    if (strcmp(action_name, "preset_openrouter") == 0) {
+        WriteRegistryData(sub_key, "custom_base_url", "https://openrouter.ai/api/v1");
+        info("BinaryLens: Base URL set to OpenRouter\n");
+        return true;
+    }
+
     WriteRegistryData(sub_key, "model_to_use", action_name);
     info("BinaryLens: Active model set to '%s'\n", action_name);
     return true;
@@ -87,19 +119,23 @@ bool HandleApiKeyActions(const char* action_name) {
     qstring key;
     std::string existing;
     const char* sub_key = "SOFTWARE\\BinaryLensPlugin";
-    if (ReadRegistryData(sub_key, action_name, existing)) {
+    if (ReadRegistryData(sub_key, "api_key", existing) ||
+        ReadRegistryData(sub_key, "openai_api_key", existing)) {
         key = existing.c_str();
     }
-    bool input = ask_str(&key, 0, "Enter your API key:");
+    bool input = ask_str(&key, 0, "Enter API Key (optional for local Ollama/LM Studio):");
 
     std::string key_str = key.c_str();
-
     if (!input)
         return true;
 
     TrimStr(key_str);
-    WriteRegistryData(sub_key, action_name, key_str.c_str());
-    info("BinaryLens: API key saved for '%s'\n", action_name);
+    WriteRegistryData(sub_key, "api_key", key_str.c_str());
+    WriteRegistryData(sub_key, "openai_api_key", key_str.c_str());
+    WriteRegistryData(sub_key, "gemini_api_key", key_str.c_str());
+    WriteRegistryData(sub_key, "deepseek_api_key", key_str.c_str());
+    WriteRegistryData(sub_key, "custom_api_key", key_str.c_str());
+    info("BinaryLens: API key saved.\n");
 
     return true;
 }
@@ -149,140 +185,83 @@ const action_desc_t rename_vars_action = ACTION_DESC_LITERAL(
     -1
 );
 
-// Gemini
-const action_desc_t gemini_25_pro_action = ACTION_DESC_LITERAL(
-    "BinaryLens:gemini-2.5-pro",
-    "Gemini-2.5-Pro",
+const action_desc_t set_model_action = ACTION_DESC_LITERAL(
+    "BinaryLens:set_model",
+    "Set Model Name...",
     &model_handler,
     nullptr,
     nullptr,
     -1
 );
 
-const action_desc_t gemini_25_flash_action = ACTION_DESC_LITERAL(
-    "BinaryLens:gemini-2.5-flash",
-    "Gemini-2.5-Flash (Faster)",
+const action_desc_t set_base_url_action = ACTION_DESC_LITERAL(
+    "BinaryLens:set_base_url",
+    "Set API Base URL...",
     &model_handler,
     nullptr,
     nullptr,
     -1
 );
 
-const action_desc_t gemini_api_action = ACTION_DESC_LITERAL(
-    "BinaryLens:gemini_api_key",
-    "Set Gemini API key",
+const action_desc_t set_api_key_action = ACTION_DESC_LITERAL(
+    "BinaryLens:set_api_key",
+    "Set API Key...",
     &api_key_handler,
     nullptr,
     nullptr,
     -1
 );
 
-// DeepSeek
-const action_desc_t deepseek_chat_action = ACTION_DESC_LITERAL(
-    "BinaryLens:deepseek-chat",
-    "DeepSeek-Chat (V3)",
+// Presets
+const action_desc_t preset_ollama_action = ACTION_DESC_LITERAL(
+    "BinaryLens:preset_ollama",
+    "Ollama (http://localhost:11434/v1)",
     &model_handler,
     nullptr,
     nullptr,
     -1
 );
 
-const action_desc_t deepseek_reasoner_action = ACTION_DESC_LITERAL(
-    "BinaryLens:deepseek-reasoner",
-    "DeepSeek-Reasoner (R1)",
+const action_desc_t preset_lmstudio_action = ACTION_DESC_LITERAL(
+    "BinaryLens:preset_lmstudio",
+    "LM Studio (http://localhost:1234/v1)",
     &model_handler,
     nullptr,
     nullptr,
     -1
 );
 
-const action_desc_t deepseek_api_action = ACTION_DESC_LITERAL(
-    "BinaryLens:deepseek_api_key",
-    "Set DeepSeek API key",
-    &api_key_handler,
-    nullptr,
-    nullptr,
-    -1
-);
-
-// OpenAI
-const action_desc_t gpt_4o_action = ACTION_DESC_LITERAL(
-    "BinaryLens:gpt-4o",
-    "GPT-4o",
+const action_desc_t preset_openai_action = ACTION_DESC_LITERAL(
+    "BinaryLens:preset_openai",
+    "OpenAI (https://api.openai.com/v1)",
     &model_handler,
     nullptr,
     nullptr,
     -1
 );
 
-const action_desc_t gpt_4o_mini_action = ACTION_DESC_LITERAL(
-    "BinaryLens:gpt-4o-mini",
-    "GPT-4o-mini",
+const action_desc_t preset_gemini_action = ACTION_DESC_LITERAL(
+    "BinaryLens:preset_gemini",
+    "Google Gemini",
     &model_handler,
     nullptr,
     nullptr,
     -1
 );
 
-const action_desc_t o3_mini_action = ACTION_DESC_LITERAL(
-    "BinaryLens:o3-mini",
-    "o3-mini",
+const action_desc_t preset_deepseek_action = ACTION_DESC_LITERAL(
+    "BinaryLens:preset_deepseek",
+    "DeepSeek",
     &model_handler,
     nullptr,
     nullptr,
     -1
 );
 
-const action_desc_t gpt_5_action = ACTION_DESC_LITERAL(
-    "BinaryLens:gpt-5",
-    "GPT-5",
+const action_desc_t preset_openrouter_action = ACTION_DESC_LITERAL(
+    "BinaryLens:preset_openrouter",
+    "OpenRouter",
     &model_handler,
-    nullptr,
-    nullptr,
-    -1
-);
-
-const action_desc_t openai_api_action = ACTION_DESC_LITERAL(
-    "BinaryLens:openai_api_key",
-    "Set OpenAI API key",
-    &api_key_handler,
-    nullptr,
-    nullptr,
-    -1
-);
-
-// Custom & Local (Ollama / vLLM / OpenRouter)
-const action_desc_t ollama_qwen_action = ACTION_DESC_LITERAL(
-    "BinaryLens:qwen2.5-coder:32b",
-    "Ollama: qwen2.5-coder:32b",
-    &model_handler,
-    nullptr,
-    nullptr,
-    -1
-);
-
-const action_desc_t custom_model_action = ACTION_DESC_LITERAL(
-    "BinaryLens:custom_model_input",
-    "Set Custom Model Name...",
-    &model_handler,
-    nullptr,
-    nullptr,
-    -1
-);
-
-const action_desc_t custom_url_action = ACTION_DESC_LITERAL(
-    "BinaryLens:custom_base_url_input",
-    "Set API Base URL (Ollama / OpenRouter)...",
-    &model_handler,
-    nullptr,
-    nullptr,
-    -1
-);
-
-const action_desc_t custom_api_action = ACTION_DESC_LITERAL(
-    "BinaryLens:custom_api_key",
-    "Set Custom API Key (Optional for Local)...",
-    &api_key_handler,
     nullptr,
     nullptr,
     -1
@@ -316,24 +295,18 @@ plugmod_t* idaapi init() {
     SetConsoleOutputCP(CP_UTF8);
     DeleteFileA("BinaryLensLog.txt");
 
-    if (!register_action(rename_subs_action)         ||
-        !register_action(rename_vars_action)         ||
-        !register_action(about_action)               ||
-        !register_action(gemini_25_pro_action)       ||
-        !register_action(gemini_25_flash_action)     ||
-        !register_action(gemini_api_action)          ||
-        !register_action(deepseek_chat_action)       ||
-        !register_action(deepseek_reasoner_action)   ||
-        !register_action(deepseek_api_action)        ||
-        !register_action(gpt_4o_action)              ||
-        !register_action(gpt_4o_mini_action)         ||
-        !register_action(o3_mini_action)             ||
-        !register_action(gpt_5_action)               ||
-        !register_action(openai_api_action)          ||
-        !register_action(ollama_qwen_action)         ||
-        !register_action(custom_model_action)        ||
-        !register_action(custom_url_action)          ||
-        !register_action(custom_api_action)) {
+    if (!register_action(rename_subs_action)       ||
+        !register_action(rename_vars_action)       ||
+        !register_action(about_action)             ||
+        !register_action(set_model_action)         ||
+        !register_action(set_base_url_action)      ||
+        !register_action(set_api_key_action)       ||
+        !register_action(preset_ollama_action)     ||
+        !register_action(preset_lmstudio_action)   ||
+        !register_action(preset_openai_action)     ||
+        !register_action(preset_gemini_action)     ||
+        !register_action(preset_deepseek_action)   ||
+        !register_action(preset_openrouter_action)) {
 
         LogMessage(LOG_PATH, true, "[BinaryLens] ERROR: Failed to register actions.\n");
         return PLUGIN_SKIP;
@@ -348,28 +321,18 @@ plugmod_t* idaapi init() {
     // Attach options to edit menu
     attach_action_to_menu("Edit/" ACTION_NAME "/", "BinaryLens:rename_subs", SETMENU_APP);
 
-    // Gemini
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Gemini/", "BinaryLens:gemini-2.5-pro", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Gemini/", "BinaryLens:gemini-2.5-flash", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Gemini/", "BinaryLens:gemini_api_key", SETMENU_APP);
+    // Configuration
+    attach_action_to_menu("Edit/" ACTION_NAME "/Configuration/", "BinaryLens:set_model", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Configuration/", "BinaryLens:set_base_url", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Configuration/", "BinaryLens:set_api_key", SETMENU_APP);
 
-    // DeepSeek
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Deepseek/", "BinaryLens:deepseek-chat", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Deepseek/", "BinaryLens:deepseek-reasoner", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Deepseek/", "BinaryLens:deepseek_api_key", SETMENU_APP);
-
-    // OpenAI
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/OpenAI/", "BinaryLens:gpt-4o", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/OpenAI/", "BinaryLens:gpt-4o-mini", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/OpenAI/", "BinaryLens:o3-mini", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/OpenAI/", "BinaryLens:gpt-5", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/OpenAI/", "BinaryLens:openai_api_key", SETMENU_APP);
-
-    // Custom / Local
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Custom or Local (Ollama)/", "BinaryLens:qwen2.5-coder:32b", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Custom or Local (Ollama)/", "BinaryLens:custom_model_input", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Custom or Local (Ollama)/", "BinaryLens:custom_base_url_input", SETMENU_APP);
-    attach_action_to_menu("Edit/" ACTION_NAME "/Select model/Custom or Local (Ollama)/", "BinaryLens:custom_api_key", SETMENU_APP);
+    // Presets
+    attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_ollama", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_lmstudio", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_openai", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_gemini", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_deepseek", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_openrouter", SETMENU_APP);
 
     attach_action_to_menu("Edit/" ACTION_NAME "/", "BinaryLens:about", SETMENU_APP);
 
@@ -384,21 +347,15 @@ void idaapi term() {
 
     unregister_action("BinaryLens:rename_subs");
     unregister_action("BinaryLens:rename_vars");
-    unregister_action("BinaryLens:gemini-2.5-pro");
-    unregister_action("BinaryLens:gemini-2.5-flash");
-    unregister_action("BinaryLens:gemini_api_key");
-    unregister_action("BinaryLens:deepseek-chat");
-    unregister_action("BinaryLens:deepseek-reasoner");
-    unregister_action("BinaryLens:deepseek_api_key");
-    unregister_action("BinaryLens:gpt-4o");
-    unregister_action("BinaryLens:gpt-4o-mini");
-    unregister_action("BinaryLens:o3-mini");
-    unregister_action("BinaryLens:gpt-5");
-    unregister_action("BinaryLens:openai_api_key");
-    unregister_action("BinaryLens:qwen2.5-coder:32b");
-    unregister_action("BinaryLens:custom_model_input");
-    unregister_action("BinaryLens:custom_base_url_input");
-    unregister_action("BinaryLens:custom_api_key");
+    unregister_action("BinaryLens:set_model");
+    unregister_action("BinaryLens:set_base_url");
+    unregister_action("BinaryLens:set_api_key");
+    unregister_action("BinaryLens:preset_ollama");
+    unregister_action("BinaryLens:preset_lmstudio");
+    unregister_action("BinaryLens:preset_openai");
+    unregister_action("BinaryLens:preset_gemini");
+    unregister_action("BinaryLens:preset_deepseek");
+    unregister_action("BinaryLens:preset_openrouter");
     unregister_action("BinaryLens:about");
 }
 

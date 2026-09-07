@@ -32,18 +32,27 @@ No C++ compiler, IDA SDK, or external OpenSSL DLLs required!
 
 ---
 
-## Supported Models & Providers
+## Model & Provider Support
 
-BinaryLens connects to any OpenAI-compatible endpoint, commercial API, or local offline inference engine:
+BinaryLens works with **any model from any provider that supports the standard OpenAI-compatible API format**. There are no hardcoded model restrictions.
 
-| Provider | Supported Models | Notes |
-| :--- | :--- | :--- |
-| **Google Gemini** | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-1.5-pro` | Fast, high-capacity context window. |
-| **DeepSeek** | `deepseek-chat` (V3), `deepseek-reasoner` (R1) | Exceptional coding and low-level reasoning. |
-| **OpenAI** | `gpt-4o`, `gpt-4o-mini`, `o3-mini`, `gpt-5` | Industry standard accuracy. |
-| **OpenRouter** | `anthropic/claude-3.7-sonnet`, `deepseek/deepseek-r1`, `meta-llama/llama-3.3-70b` | Access any model via unified API key. |
-| **Ollama (Offline/Local)** | `qwen2.5-coder:32b`, `deepseek-coder-v2`, `llama3.3` | **100% private**, runs locally on `http://localhost:11434/v1` without an API key. |
-| **Custom / LM Studio / vLLM** | Any custom model identifier | Point to your custom Base URL and port. |
+You simply configure:
+- **API Base URL**: The endpoint of your chosen provider or local server.
+- **Model Identifier**: Any model name you wish to invoke (cloud or local).
+- **API Key**: Your API key (or leave empty for local inference).
+
+### Common Endpoints
+
+- **Local Inference (Private & Offline)**:
+  - **Ollama**: `http://localhost:11434/v1` (no API key required)
+  - **LM Studio**: `http://localhost:1234/v1` (no API key required)
+  - **vLLM / llama.cpp / LocalAI**: Point to your local endpoint `/v1`
+- **Cloud Providers**:
+  - **OpenAI**: `https://api.openai.com/v1`
+  - **Google Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai`
+  - **DeepSeek**: `https://api.deepseek.com/v1`
+  - **OpenRouter**: `https://openrouter.ai/api/v1` (Claude, Llama, Qwen, etc.)
+  - Any custom corporate gateway or reverse proxy.
 
 ---
 

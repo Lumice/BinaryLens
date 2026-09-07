@@ -40,42 +40,14 @@ DEFAULT_CONFIG = {
     "timeout_sec": 180,
 }
 
-PROVIDERS = {
-    "Gemini": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "default_model": "gemini-2.5-pro",
-        "models": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro"],
-    },
-    "DeepSeek": {
-        "base_url": "https://api.deepseek.com/v1",
-        "default_model": "deepseek-chat",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
-    },
-    "OpenAI": {
-        "base_url": "https://api.openai.com/v1",
-        "default_model": "gpt-4o",
-        "models": ["gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-5"],
-    },
-    "OpenRouter": {
-        "base_url": "https://openrouter.ai/api/v1",
-        "default_model": "anthropic/claude-3.7-sonnet",
-        "models": [
-            "anthropic/claude-3.7-sonnet",
-            "deepseek/deepseek-r1",
-            "google/gemini-2.5-pro",
-            "meta-llama/llama-3.3-70b-instruct"
-        ],
-    },
-    "Ollama (Local)": {
-        "base_url": "http://localhost:11434/v1",
-        "default_model": "qwen2.5-coder:32b",
-        "models": ["qwen2.5-coder:32b", "deepseek-coder-v2", "llama3.3:latest"],
-    },
-    "Custom / Other": {
-        "base_url": "http://localhost:1234/v1",
-        "default_model": "custom-model",
-        "models": ["custom-model"],
-    }
+ENDPOINT_PRESETS = {
+    "Local: Ollama (http://localhost:11434/v1)": "http://localhost:11434/v1",
+    "Local: LM Studio (http://localhost:1234/v1)": "http://localhost:1234/v1",
+    "Cloud: OpenAI (https://api.openai.com/v1)": "https://api.openai.com/v1",
+    "Cloud: Google Gemini (https://generativelanguage.googleapis.com/v1beta/openai)": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "Cloud: DeepSeek (https://api.deepseek.com/v1)": "https://api.deepseek.com/v1",
+    "Cloud: OpenRouter (https://openrouter.ai/api/v1)": "https://openrouter.ai/api/v1",
+    "Custom Base URL": "",
 }
 
 SUB_REN_SYS_PROMPT = """You are a senior reverse engineering analyst specializing in C decompilation.
@@ -279,27 +251,27 @@ class SettingsDialog(ida_kernwin.Form):
     """Configuration form for BinaryLens."""
     def __init__(self, config: dict):
         self.config = config
-        providers_list = list(PROVIDERS.keys())
+        presets_list = list(ENDPOINT_PRESETS.keys())
         current_p_idx = 0
-        if config.get("provider") in providers_list:
-            current_p_idx = providers_list.index(config["provider"])
+        if config.get("preset") in presets_list:
+            current_p_idx = presets_list.index(config["preset"])
 
         ida_kernwin.Form.__init__(
             self,
-            r"""STARTITEM {id_provider}
+            r"""STARTITEM {id_preset}
 BUTTON YES Save
 BUTTON CANCEL Cancel
 BinaryLens Configuration
 
-<#Select LLM Provider#Provider  :{id_provider}>
-<#API Base URL (OpenAI-compatible endpoint)#Base URL  :{id_base_url}>
-<#Model Name (e.g. gemini-2.5-pro, deepseek-chat, gpt-4o, qwen2.5-coder:32b)#Model     :{id_model}>
-<#API Key (Leave empty for local Ollama)#API Key   :{id_api_key}>
+<#Quick-fill Base URL preset#Preset    :{id_preset}>
+<#OpenAI-compatible Base URL#Base URL  :{id_base_url}>
+<#Any model name (e.g. your local model or cloud model string)#Model Name:{id_model}>
+<#API Key (Leave empty for local runtimes like Ollama/LM Studio)#API Key   :{id_api_key}>
 <#Number of subroutines to send per batch request#Batch Size:{id_batch_size}>
 """,
             {
-                "id_provider": ida_kernwin.Form.DropdownListControl(
-                    items=providers_list,
+                "id_preset": ida_kernwin.Form.DropdownListControl(
+                    items=presets_list,
                     readonly=True,
                     selval=current_p_idx
                 ),
@@ -311,13 +283,13 @@ BinaryLens Configuration
         )
 
     def OnDropdownChange(self, fid):
-        providers_list = list(PROVIDERS.keys())
-        sel_idx = self.id_provider.value
-        if 0 <= sel_idx < len(providers_list):
-            p_name = providers_list[sel_idx]
-            info = PROVIDERS[p_name]
-            self.SetControlValue(self.id_base_url, info["base_url"])
-            self.SetControlValue(self.id_model, info["default_model"])
+        presets_list = list(ENDPOINT_PRESETS.keys())
+        sel_idx = self.id_preset.value
+        if 0 <= sel_idx < len(presets_list):
+            p_name = presets_list[sel_idx]
+            url = ENDPOINT_PRESETS[p_name]
+            if url:
+                self.SetControlValue(self.id_base_url, url)
         return 1
 
 
@@ -413,15 +385,15 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         dialog.Compile()
         ok = dialog.Execute()
         if ok == 1:
-            providers_list = list(PROVIDERS.keys())
-            sel_idx = dialog.id_provider.value
-            self.config["provider"] = providers_list[sel_idx] if 0 <= sel_idx < len(providers_list) else "Custom"
+            presets_list = list(ENDPOINT_PRESETS.keys())
+            sel_idx = dialog.id_preset.value
+            self.config["preset"] = presets_list[sel_idx] if 0 <= sel_idx < len(presets_list) else "Custom"
             self.config["base_url"] = dialog.id_base_url.value.strip()
             self.config["model"] = dialog.id_model.value.strip()
             self.config["api_key"] = dialog.id_api_key.value.strip()
             self.config["batch_size"] = max(1, int(dialog.id_batch_size.value))
             save_config(self.config)
-            ida_kernwin.info(f"BinaryLens settings saved.\nActive Model: {self.config['model']}\nBase URL: {self.config['base_url']}")
+            ida_kernwin.info(f"BinaryLens settings saved.\nModel: {self.config['model']}\nBase URL: {self.config['base_url']}")
         dialog.Free()
 
     def rename_all_subs(self):
