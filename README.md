@@ -18,10 +18,10 @@ BinaryLens works with IDA Pro 8.x and 9.x on Windows, macOS, and Linux.
 ## Features
 
 ### 1. Rename All Subroutines
-When IDA disassembles a binary file, it gives unknown functions generic names like `sub_140001000`. BinaryLens decompiles these functions in batches, asks the model what they do, and renames them to descriptive names like `ValidateUserToken` or `CalculateCameraTransform`.
+When IDA disassembles a binary file, it gives unknown functions generic names like `sub_140001000`. BinaryLens decompiles these functions in batches, asks the model what they do, and renames them to descriptive names like `ValidateUserToken` or `ParsePacketHeader`.
 
 * Menu location: `Edit -> BinaryLens -> Rename all subroutines`
-* You can provide an optional target hint (for example, "Unreal Engine 5 tactical shooter") to help the model pick accurate names. A drop-down menu remembers your previous inputs so you can easily reuse them or clear history.
+* You can provide an optional target hint (for example, "network client" or "cryptography library") to help the model pick accurate names. A drop-down menu remembers your previous inputs so you can easily reuse them or clear history.
 
 ### 2. Rename Variables in a Function
 In the Hex-Rays pseudocode view, local variables often have generic names like `a1`, `v1`, and `v2`. BinaryLens reads the function code and renames those variables to names that describe their purpose, like `socket_handle` or `packet_size`.
