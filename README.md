@@ -46,10 +46,16 @@ Some models, like DeepSeek V4 Flash, spend extra tokens on internal chain-of-tho
 
 ---
 
-## Installation (IDAPython Plugin)
+### Installation
 
+#### Option A: IDA 9.x (HCLI / Plugin Manager)
+Download the release archive from GitHub and install via HCLI:
+```bash
+hcli plugin install BinaryLens-v1.2.0.zip
+```
+
+#### Option B: Manual Drop-in (IDA 8.x and 9.x)
 You do not need a C++ compiler or external DLL files.
-
 1. Copy `python/binarylens.py` into your IDA plugins directory:
    * Windows: `%APPDATA%\Hex-Rays\IDA Pro\plugins\`
    * Linux / macOS: `~/.idapro/plugins/`
@@ -80,5 +86,6 @@ Open `Edit -> BinaryLens -> Settings...` to customize your setup:
 * **Base URL**: The web address of the completion API endpoint.
 * **Model Name**: The model identifier you want to call (such as `deepseek-v4-flash` or `gemini-2.5-pro`).
 * **API Key**: Your secret key for cloud providers. Leave this empty for local tools like Ollama or LM Studio.
-* **Batch Size**: The number of functions sent in each prompt (default: `40`).
+* **Batch Size**: The number of functions analyzed per prompt batch (default: `20`; 10–20 is recommended for fast turnarounds on large binaries).
 * **Reasoning Level**: The thinking intensity for reasoning models. Keep this at `none` for fast batch renaming.
+* **Max Function Size (KB)**: Skips functions larger than this threshold in batch mode to prevent decompiler stalls on unrolled code (default: `12` KB; set to `0` for unlimited).
