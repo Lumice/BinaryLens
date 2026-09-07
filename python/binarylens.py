@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple, Any
 
 # IDA Pro modules
@@ -219,14 +220,27 @@ def sanitize_identifier(name: str) -> str:
     return cleaned
 
 def truncate_pseudocode(lines: List[str], max_lines: int = 150) -> str:
-    """Keep the start and end of large functions to preserve context without blowing token limits."""
-    if len(lines) <= max_lines:
-        return "\n".join(lines)
+    """Compress consecutive blank lines, strip trailing spaces, and truncate huge functions."""
+    cleaned_lines = []
+    prev_blank = False
+    for line in lines:
+        stripped = line.rstrip()
+        is_blank = (len(stripped.strip()) == 0)
+        if is_blank:
+            if not prev_blank:
+                cleaned_lines.append("")
+                prev_blank = True
+        else:
+            cleaned_lines.append(stripped)
+            prev_blank = False
+
+    if len(cleaned_lines) <= max_lines:
+        return "\n".join(cleaned_lines)
     head_count = int(max_lines * 0.8)
     tail_count = max_lines - head_count
-    head = lines[:head_count]
-    tail = lines[-tail_count:]
-    omitted = len(lines) - max_lines
+    head = cleaned_lines[:head_count]
+    tail = cleaned_lines[-tail_count:]
+    omitted = len(cleaned_lines) - max_lines
     return "\n".join(head) + f"\n\n// ... [{omitted} lines truncated for length] ...\n\n" + "\n".join(tail)
 
 def extract_balanced_json(text: str) -> Optional[dict]:
@@ -1145,13 +1159,32 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         # 1. Collect candidate sub_* functions on the main thread
         targets: List[Tuple[int, str]] = []
         qty = ida_funcs.get_func_qty()
+        skipped_lib = 0
+        skipped_thunk = 0
         for i in range(qty):
             f = ida_funcs.getn_func(i)
             if not f:
                 continue
+
+            # Filter out library runtime functions (FLIRT), compiler thunks, and tails
+            flags = getattr(f, "flags", 0)
+            func_lib = getattr(ida_funcs, "FUNC_LIB", 0x04)
+            func_thunk = getattr(ida_funcs, "FUNC_THUNK", 0x80)
+            func_tail = getattr(ida_funcs, "FUNC_TAIL", 0x8000)
+
+            if flags & (func_lib | func_tail):
+                skipped_lib += 1
+                continue
+            if flags & func_thunk:
+                skipped_thunk += 1
+                continue
+
             name = ida_funcs.get_func_name(f.start_ea)
             if name and name.startswith("sub_"):
                 targets.append((f.start_ea, name))
+
+        if skipped_lib or skipped_thunk:
+            post_ida_msg(f"[BinaryLens] Filtered {skipped_lib} library/tail functions and {skipped_thunk} compiler thunks from candidates.\n")
 
         if not targets:
             post_ida_msg("[BinaryLens] No sub_* functions found to rename.\n")
@@ -1196,167 +1229,196 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             MAX_BATCH_PROMPT_CHARS = 120000
 
             pending_queue = list(targets)
-            batch_num = 0
             total_targets = len(targets)
             consecutive_failures = 0
 
-            while pending_queue:
+            def decompile_batch_sync(queue_slice: List[Tuple[int, str]], b_idx: int) -> Tuple[List[Tuple[int, str]], List[str], int]:
+                """Decompiles candidate functions in a single execute_sync call on the main thread."""
                 if self._cancel.is_set() or run_id != self._run_id:
-                    break
+                    return [], [], 0
 
-                batch_num += 1
-                batch: List[Tuple[int, str]] = []
-                decompiled_chunks: List[str] = []
-                accumulated_chars = 0
+                batch_items: List[Tuple[int, str]] = []
+                chunks: List[str] = []
+                acc_chars = 0
+                consumed = 0
 
-                while pending_queue and len(batch) < batch_size:
+                for ea, name in queue_slice:
+                    if self._cancel.is_set() or run_id != self._run_id:
+                        break
+                    f = ida_funcs.get_func(ea)
+                    if not f:
+                        consumed += 1
+                        continue
+                    f_size = f.size()
+                    if max_func_bytes > 0 and f_size > max_func_bytes:
+                        post_ida_msg(f"[BinaryLens] Skipping {name} at 0x{ea:X}: {f_size / 1024:.1f} KB exceeds {max_func_size_kb} KB batch limit.\n")
+                        consumed += 1
+                        continue
+                    try:
+                        cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
+                        if cfunc:
+                            lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
+                            chunk_text = truncate_pseudocode(lines, max_lines=150)
+                            chunk_len = len(chunk_text)
+                            if batch_items and (acc_chars + chunk_len > MAX_BATCH_PROMPT_CHARS):
+                                # Stop adding to this batch to prevent prompt overflow; leave remaining for next batch
+                                break
+                            batch_items.append((ea, name))
+                            chunks.append(chunk_text)
+                            acc_chars += chunk_len
+                    except Exception:
+                        pass
+                    consumed += 1
+
+                # Update progress dialog status from main thread
+                if getattr(self, "progress_dialog", None):
+                    cur_processed = total_targets - len(pending_queue) + consumed
+                    cur_elapsed = time.time() - start_time
+                    self.progress_dialog.update_progress(cur_processed, total_targets, total_renamed, cur_elapsed)
+                    self.progress_dialog.status_lbl.setText(
+                        f"Batch {b_idx}: Decompiled {len(batch_items)} functions ({cur_processed}/{total_targets})..."
+                    )
+
+                return batch_items, chunks, consumed
+
+            def fetch_next_batch(b_idx: int):
+                """Pulls and decompiles the next batch using a single execute_sync call."""
+                while pending_queue and not self._cancel.is_set() and run_id == self._run_id:
+                    candidates = pending_queue[:batch_size]
+                    decomp_res: List[Any] = []
+
+                    def sync_decomp():
+                        res = decompile_batch_sync(candidates, b_idx)
+                        decomp_res.append(res)
+                        return 1
+
+                    sync_rc = ida_kernwin.execute_sync(sync_decomp, ida_kernwin.MFF_WRITE)
+                    if sync_rc < 0 or not decomp_res:
+                        return None
+
+                    batch_items, chunks, consumed = decomp_res[0]
+                    if consumed > 0:
+                        del pending_queue[:consumed]
+                    else:
+                        del pending_queue[:len(candidates)]
+
+                    if batch_items:
+                        submitted = {n: a for a, n in batch_items}
+                        submitted_hashes = {a: get_func_content_hash(a) for a, n in batch_items}
+                        return (b_idx, batch_items, chunks, submitted, submitted_hashes)
+
+                return None
+
+            # Pre-decompile Batch 1
+            cur_batch = fetch_next_batch(1)
+            batch_num = 1
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                while cur_batch:
                     if self._cancel.is_set() or run_id != self._run_id:
                         break
 
-                    ea, name = pending_queue.pop(0)
+                    b_idx, batch_items, chunks, submitted, submitted_hashes = cur_batch
+                    post_ida_msg(f"[BinaryLens] Processing batch {b_idx} ({len(batch_items)} functions)...\n")
 
-                    processed_so_far = total_targets - len(pending_queue)
-                    cur_elapsed = time.time() - start_time
-                    def sync_status():
+                    user_prompt = ""
+                    if user_hint:
+                        user_prompt += f"User context / hints: {user_hint}\n\n"
+                    user_prompt += "Decompiled Functions:\n\n" + "\n\n/* ------------------ */\n\n".join(chunks)
+
+                    def sync_query_status():
                         if getattr(self, "progress_dialog", None):
-                            self.progress_dialog.update_progress(
-                                processed_so_far, total_targets, total_renamed, cur_elapsed
-                            )
                             self.progress_dialog.status_lbl.setText(
-                                f"Batch {batch_num}: Decompiling {name} ({processed_so_far}/{total_targets})..."
+                                f"Batch {b_idx}: Querying {self.config.get('model', 'model')}..."
                             )
                         return 1
-                    ida_kernwin.execute_sync(sync_status, ida_kernwin.MFF_FAST)
+                    ida_kernwin.execute_sync(sync_query_status, ida_kernwin.MFF_FAST)
 
-                    chunk_res: List[str] = []
-                    def decompile_single():
-                        f = ida_funcs.get_func(ea)
-                        if not f:
-                            return 1
-                        f_size = f.size()
-                        if max_func_bytes > 0 and f_size > max_func_bytes:
-                            post_ida_msg(f"[BinaryLens] Skipping {name} at 0x{ea:X}: {f_size / 1024:.1f} KB exceeds {max_func_size_kb} KB batch limit.\n")
-                            return 1
-                        try:
-                            cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
-                            if cfunc:
-                                lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
-                                chunk_res.append(truncate_pseudocode(lines, max_lines=150))
-                        except Exception:
-                            pass
-                        return 1
+                    # Pipelining: Dispatch HTTP request for current batch to executor thread
+                    llm_future = executor.submit(
+                        call_llm,
+                        SUB_REN_SYS_PROMPT,
+                        user_prompt,
+                        self.config,
+                        on_log=post_ida_msg,
+                        cancel_check=lambda: (self._cancel.is_set() or run_id != self._run_id)
+                    )
 
-                    sync_res = ida_kernwin.execute_sync(decompile_single, ida_kernwin.MFF_WRITE)
-                    if sync_res < 0:
-                        post_ida_msg(f"[BinaryLens] Warning: IDA rejected sync decompilation for {name}.\n")
+                    # While HTTP request is in-flight across the network, pre-decompile the NEXT batch!
+                    next_batch = None
+                    if pending_queue and not self._cancel.is_set() and run_id == self._run_id:
+                        batch_num += 1
+                        next_batch = fetch_next_batch(batch_num)
+
+                    # Await the current batch's LLM response
+                    raw_resp = llm_future.result()
+
+                    if self._cancel.is_set() or run_id != self._run_id:
+                        post_ida_msg("[BinaryLens] Analysis cancelled by user. Fencing pending batch mutations.\n")
+                        break
+
+                    if not raw_resp:
+                        consecutive_failures += 1
+                        post_ida_msg(f"[BinaryLens] Batch {b_idx}: Failed to get response from model.\n")
+                        if consecutive_failures >= 3:
+                            post_ida_msg("[BinaryLens] Halting analysis: 3 consecutive batches failed. Check API key or settings.\n")
+                            break
+                        time.sleep(1.5)
+                        cur_batch = next_batch
                         continue
 
-                    if chunk_res:
-                        chunk_text = chunk_res[0]
-                        chunk_len = len(chunk_text)
-                        if batch and (accumulated_chars + chunk_len > MAX_BATCH_PROMPT_CHARS):
-                            pending_queue.insert(0, (ea, name))
-                            break
-                        batch.append((ea, name))
-                        decompiled_chunks.append(chunk_text)
-                        accumulated_chars += chunk_len
+                    consecutive_failures = 0
+                    summary, renames = parse_model_response(raw_resp)
+                    if summary:
+                        post_ida_msg(f"[BinaryLens] Component Summary: {summary}\n")
 
-                if not batch:
-                    continue
+                    if not renames:
+                        post_ida_msg(f"[BinaryLens] Batch {b_idx}: No valid renames returned by model.\n")
+                    else:
+                        def apply_batch():
+                            nonlocal total_renamed
+                            if self._cancel.is_set() or run_id != self._run_id:
+                                return 0
+                            for orig_name, new_name in renames.items():
+                                if self._cancel.is_set() or run_id != self._run_id:
+                                    return 0
+                                # BL-002: Verify symbol is strictly in the submitted batch
+                                expected_ea = submitted.get(orig_name)
+                                if expected_ea is None:
+                                    continue
+                                cur_ea = ida_name.get_name_ea(ida_idaapi.BADADDR, orig_name)
+                                if cur_ea != expected_ea:
+                                    continue
+                                if get_func_content_hash(expected_ea) != submitted_hashes.get(expected_ea):
+                                    continue
+                                if not new_name or new_name == orig_name:
+                                    continue
+                                clean_name = sanitize_identifier(new_name)
+                                if not clean_name:
+                                    continue
+                                if ida_name.set_name(expected_ea, clean_name, ida_name.SN_NOWARN):
+                                    actual_name = ida_name.get_name(expected_ea)
+                                    total_renamed += 1
+                                    post_ida_msg(f"  [+] Renamed {orig_name} -> {actual_name}\n")
+                                    if summary:
+                                        pfn = ida_funcs.get_func(expected_ea)
+                                        if pfn and not ida_funcs.get_func_cmt(pfn, False):
+                                            ida_funcs.set_func_cmt(pfn, f"Component: {summary}", False)
+                            return 1
 
-                if self._cancel.is_set() or run_id != self._run_id:
-                    break
+                        ida_kernwin.execute_sync(apply_batch, ida_kernwin.MFF_WRITE)
 
-                post_ida_msg(f"[BinaryLens] Processing batch {batch_num} ({len(batch)} functions)...\n")
+                    cur_elapsed = time.time() - start_time
+                    def sync_update_count():
+                        if getattr(self, "progress_dialog", None):
+                            processed_so_far = total_targets - len(pending_queue)
+                            self.progress_dialog.update_progress(processed_so_far, total_targets, total_renamed, cur_elapsed)
+                        return 1
+                    ida_kernwin.execute_sync(sync_update_count, ida_kernwin.MFF_FAST)
 
-                user_prompt = ""
-                if user_hint:
-                    user_prompt += f"User context / hints: {user_hint}\n\n"
-                user_prompt += "Decompiled Functions:\n\n" + "\n\n/* ------------------ */\n\n".join(decompiled_chunks)
-
-                submitted = {n: a for a, n in batch}
-                submitted_hashes = {a: get_func_content_hash(a) for a, n in batch}
-
-                def sync_query_status():
-                    if getattr(self, "progress_dialog", None):
-                        self.progress_dialog.status_lbl.setText(
-                            f"Batch {batch_num}: Querying {self.config.get('model', 'model')}..."
-                        )
-                    return 1
-                ida_kernwin.execute_sync(sync_query_status, ida_kernwin.MFF_FAST)
-
-                raw_resp = call_llm(
-                    SUB_REN_SYS_PROMPT,
-                    user_prompt,
-                    self.config,
-                    on_log=post_ida_msg,
-                    cancel_check=lambda: (self._cancel.is_set() or run_id != self._run_id)
-                )
-
-                if self._cancel.is_set() or run_id != self._run_id:
-                    post_ida_msg("[BinaryLens] Analysis cancelled by user. Fencing pending batch mutations.\n")
-                    break
-
-                if not raw_resp:
-                    consecutive_failures += 1
-                    post_ida_msg(f"[BinaryLens] Batch {batch_num}: Failed to get response from model.\n")
-                    if consecutive_failures >= 3:
-                        post_ida_msg("[BinaryLens] Halting analysis: 3 consecutive batches failed. Check API key or settings.\n")
-                        break
-                    time.sleep(1.5)
-                    continue
-
-                consecutive_failures = 0
-                summary, renames = parse_model_response(raw_resp)
-                if summary:
-                    post_ida_msg(f"[BinaryLens] Component Summary: {summary}\n")
-
-                if not renames:
-                    post_ida_msg(f"[BinaryLens] Batch {batch_num}: No valid renames returned by model.\n")
-                    continue
-
-                def apply_batch():
-                    nonlocal total_renamed
-                    if self._cancel.is_set() or run_id != self._run_id:
-                        return 0
-                    for orig_name, new_name in renames.items():
-                        if self._cancel.is_set() or run_id != self._run_id:
-                            return 0
-                        # BL-002: Verify symbol is strictly in the submitted batch
-                        expected_ea = submitted.get(orig_name)
-                        if expected_ea is None:
-                            continue
-                        cur_ea = ida_name.get_name_ea(ida_idaapi.BADADDR, orig_name)
-                        if cur_ea != expected_ea:
-                            continue
-                        if get_func_content_hash(expected_ea) != submitted_hashes.get(expected_ea):
-                            continue
-                        if not new_name or new_name == orig_name:
-                            continue
-                        clean_name = sanitize_identifier(new_name)
-                        if not clean_name:
-                            continue
-                        if ida_name.set_name(expected_ea, clean_name, ida_name.SN_NOWARN):
-                            actual_name = ida_name.get_name(expected_ea)
-                            total_renamed += 1
-                            post_ida_msg(f"  [+] Renamed {orig_name} -> {actual_name}\n")
-                            if summary:
-                                pfn = ida_funcs.get_func(expected_ea)
-                                if pfn and not ida_funcs.get_func_cmt(pfn, False):
-                                    ida_funcs.set_func_cmt(pfn, f"Component: {summary}", False)
-                    return 1
-
-                ida_kernwin.execute_sync(apply_batch, ida_kernwin.MFF_WRITE)
-
-                cur_elapsed = time.time() - start_time
-                def sync_update_count():
-                    if getattr(self, "progress_dialog", None):
-                        processed_so_far = total_targets - len(pending_queue)
-                        self.progress_dialog.update_progress(processed_so_far, total_targets, total_renamed, cur_elapsed)
-                    return 1
-                ida_kernwin.execute_sync(sync_update_count, ida_kernwin.MFF_FAST)
-
-                time.sleep(0.05)
+                    # Move to pre-decompiled batch
+                    cur_batch = next_batch
+                    time.sleep(0.05)
 
             total_time = time.time() - start_time
             mins = int(total_time // 60)

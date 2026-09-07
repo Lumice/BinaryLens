@@ -96,6 +96,28 @@ def test_truncation():
     assert "line 999" in truncated
     print("[PASS] Pseudocode truncation")
 
+def test_pseudocode_compression():
+    lines = [
+        "int sub_1000()",
+        "  {   ",
+        "",
+        "   ",
+        "",
+        "    int a = 1;   ",
+        "",
+        "",
+        "    return a;",
+        "  }  "
+    ]
+    cleaned = binarylens.truncate_pseudocode(lines, max_lines=50)
+    # Check that multiple blank lines are compressed to single blank line
+    assert "\n\n\n" not in cleaned
+    # Check that trailing spaces are stripped
+    assert "int a = 1;   " not in cleaned
+    assert "int a = 1;" in cleaned
+    assert "int sub_1000()\n  {\n\n    int a = 1;\n\n    return a;\n  }" == cleaned
+    print("[PASS] Pseudocode whitespace and blank line compression")
+
 def test_hint_history():
     from unittest.mock import patch
     cfg = {"hint_history": ["old_hint_1", "old_hint_2"]}
@@ -248,6 +270,7 @@ if __name__ == "__main__":
     test_variable_parsing()
     test_identifier_sanitization()
     test_truncation()
+    test_pseudocode_compression()
     test_hint_history()
     test_balanced_json_extraction()
     test_qt_enum_resolution()
@@ -256,4 +279,4 @@ if __name__ == "__main__":
     test_out_of_batch_rejection()
     test_atomic_config()
     test_manifest_compliance()
-    print("\nAll 13 unit tests passed successfully!")
+    print("\nAll 14 unit tests passed successfully!")
