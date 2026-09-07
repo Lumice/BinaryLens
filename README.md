@@ -9,7 +9,7 @@
 
 BinaryLens is a plugin for IDA Pro that connects to LLMs (large language models) to make reverse engineering faster and easier to read.
 
-![](imgs/showcase.gif?raw=true)
+![](imgs/idasubroutine.gif?raw=true)
 
 BinaryLens works with IDA Pro 8.x and 9.x on Windows, macOS, and Linux.
 
