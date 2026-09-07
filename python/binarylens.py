@@ -157,6 +157,17 @@ def sanitize_identifier(name: str) -> str:
         cleaned = "_" + cleaned
     return cleaned
 
+def truncate_pseudocode(lines: List[str], max_lines: int = 150) -> str:
+    """Keep the start and end of large functions to preserve context without blowing token limits."""
+    if len(lines) <= max_lines:
+        return "\n".join(lines)
+    head_count = int(max_lines * 0.8)
+    tail_count = max_lines - head_count
+    head = lines[:head_count]
+    tail = lines[-tail_count:]
+    omitted = len(lines) - max_lines
+    return "\n".join(head) + f"\n\n// ... [{omitted} lines truncated for length] ...\n\n" + "\n".join(tail)
+
 def parse_model_response(raw_text: str) -> Tuple[str, Dict[str, str]]:
     """
     Extracts summary and mapping (functions or variables) from JSON or INI format.
@@ -893,7 +904,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                             cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
                             if cfunc:
                                 lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
-                                decompiled_chunks.append("\n".join(lines))
+                                decompiled_chunks.append(truncate_pseudocode(lines, max_lines=150))
                         except Exception:
                             continue
                     return 1
@@ -913,6 +924,10 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 if user_hint:
                     user_prompt += f"User context / hints: {user_hint}\n\n"
                 user_prompt += "Decompiled Functions:\n\n" + "\n\n/* ------------------ */\n\n".join(decompiled_chunks)
+
+                # Cap prompt size to prevent exceeding model context length
+                if len(user_prompt) > 300000:
+                    user_prompt = user_prompt[:300000] + "\n\n// ... [Remaining batch content truncated for length safety] ...\n"
 
                 raw_resp = call_llm(
                     SUB_REN_SYS_PROMPT,
@@ -989,7 +1004,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         cfunc = vdui.cfunc
         entry_ea = cfunc.entry_ea
         lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
-        code_str = "\n".join(lines)
+        code_str = truncate_pseudocode(lines, max_lines=300)
 
         threading.Thread(
             target=self._worker_rename_vars,
@@ -1045,7 +1060,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             return
 
         lines = [ida_lines.tag_remove(sl.line) for sl in vdui.cfunc.get_pseudocode()]
-        code_str = "\n".join(lines)
+        code_str = truncate_pseudocode(lines, max_lines=400)
         func_name = ida_funcs.get_func_name(vdui.cfunc.entry_ea)
 
         def worker():

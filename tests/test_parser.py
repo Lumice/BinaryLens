@@ -72,9 +72,18 @@ def test_identifier_sanitization():
     assert binarylens.sanitize_identifier('123_invalid_lead') == "_123_invalid_lead"
     print("[PASS] Identifier sanitization")
 
+def test_truncation():
+    lines = [f"line {i}" for i in range(1000)]
+    truncated = binarylens.truncate_pseudocode(lines, max_lines=150)
+    assert "truncated for length" in truncated
+    assert "line 0" in truncated
+    assert "line 999" in truncated
+    print("[PASS] Pseudocode truncation")
+
 if __name__ == "__main__":
     test_json_parsing()
     test_ini_parsing()
     test_variable_parsing()
     test_identifier_sanitization()
+    test_truncation()
     print("\nAll unit tests passed successfully!")
