@@ -216,7 +216,8 @@ def call_llm(
     system_prompt: str,
     user_prompt: str,
     config: dict,
-    on_log=None
+    on_log=None,
+    raise_errors: bool = False
 ) -> Optional[str]:
     """Sends a chat completion request to an OpenAI-compatible endpoint."""
     base_url = config.get("base_url", "").strip().rstrip("/")
@@ -224,7 +225,7 @@ def call_llm(
         base_url = "https://" + base_url
 
     endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-    model = config.get("model", "gemini-2.5-pro")
+    model = config.get("model", "deepseek-v4-flash")
     api_key = config.get("api_key", "").strip()
     timeout = config.get("timeout_sec", 180)
 
@@ -247,6 +248,7 @@ def call_llm(
     body_bytes = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(endpoint, data=body_bytes, method="POST")
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) BinaryLens/2.0")
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
 
@@ -260,12 +262,26 @@ def call_llm(
             return content
     except urllib.error.HTTPError as e:
         err_msg = e.read().decode("utf-8", errors="ignore")
+        try:
+            err_json = json.loads(err_msg)
+            if "error" in err_json:
+                err_val = err_json["error"]
+                if isinstance(err_val, dict) and "message" in err_val:
+                    err_msg = err_val["message"]
+                elif isinstance(err_val, str):
+                    err_msg = err_val
+        except Exception:
+            pass
         if on_log:
             on_log(f"[BinaryLens] HTTP Error {e.code}: {err_msg}\n")
+        if raise_errors:
+            raise RuntimeError(f"HTTP {e.code}: {err_msg}")
         return None
     except Exception as e:
         if on_log:
             on_log(f"[BinaryLens] Request failed: {e}\n")
+        if raise_errors:
+            raise
         return None
 
 
@@ -397,36 +413,57 @@ if HAS_QT:
             model = self.model_edit.text().strip()
 
             if not base_url:
-                self.test_status.setStyleSheet("color: red;")
+                self.test_status.setStyleSheet("color: #dc3545;")
                 self.test_status.setText("Base URL cannot be empty.")
                 return
 
-            self.test_status.setStyleSheet("color: #0066cc;")
+            self.test_status.setStyleSheet("color: #0d6efd;")
             self.test_status.setText("Testing connection...")
             self.test_btn.setEnabled(False)
 
+            result = {"done": False, "ok": False, "err": ""}
+
             def do_test():
-                err = None
                 try:
-                    messages = [{"role": "user", "content": "Respond with OK"}]
-                    resp = query_llm(base_url, api_key, model, messages, temperature=0.0)
-                    if not resp:
-                        err = "No response from endpoint."
-                except Exception as ex:
-                    err = str(ex)
-
-                def on_done():
-                    self.test_btn.setEnabled(True)
-                    if err:
-                        self.test_status.setStyleSheet("color: red;")
-                        self.test_status.setText(f"Failed: {err[:50]}")
+                    cfg = {
+                        "base_url": base_url,
+                        "api_key": api_key,
+                        "model": model,
+                        "timeout_sec": 15
+                    }
+                    resp = call_llm(
+                        system_prompt="You are a helpful assistant.",
+                        user_prompt="Hello",
+                        config=cfg,
+                        raise_errors=True
+                    )
+                    if resp is not None:
+                        result["ok"] = True
                     else:
-                        self.test_status.setStyleSheet("color: green; font-weight: bold;")
-                        self.test_status.setText("Connection successful!")
-
-                QtCore.QTimer.singleShot(0, on_done)
+                        result["err"] = "Empty response received."
+                except Exception as ex:
+                    result["err"] = str(ex)
+                finally:
+                    result["done"] = True
 
             threading.Thread(target=do_test, daemon=True).start()
+
+            # Poll on main thread to guarantee UI update in PySide6/PyQt5
+            poll_timer = QtCore.QTimer(self)
+            def check_poll():
+                if result["done"]:
+                    poll_timer.stop()
+                    self.test_btn.setEnabled(True)
+                    if result["ok"]:
+                        self.test_status.setStyleSheet("color: #198754; font-weight: bold;")
+                        self.test_status.setText("Connected successfully!")
+                    else:
+                        self.test_status.setStyleSheet("color: #dc3545;")
+                        err_text = result["err"] or "Request failed."
+                        self.test_status.setText(f"Failed: {err_text[:70]}")
+
+            poll_timer.timeout.connect(check_poll)
+            poll_timer.start(100)
 
         def get_values(self):
             return {
