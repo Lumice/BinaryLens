@@ -26,17 +26,25 @@ import ida_kernwin
 import ida_lines
 import ida_name
 
-# Qt UI support (bundled with IDA Pro 7.x - 9.x)
+# Qt UI support (Bundled with IDA Pro: PySide6 in IDA 9+, PyQt5 in IDA 7/8)
 HAS_QT = False
 try:
-    from PyQt5 import QtWidgets, QtCore, QtGui
+    from PySide6 import QtWidgets, QtCore, QtGui
     HAS_QT = True
 except ImportError:
     try:
-        from PyQt6 import QtWidgets, QtCore, QtGui
+        from PyQt5 import QtWidgets, QtCore, QtGui
         HAS_QT = True
     except ImportError:
-        pass
+        try:
+            from PyQt6 import QtWidgets, QtCore, QtGui
+            HAS_QT = True
+        except ImportError:
+            try:
+                from PySide2 import QtWidgets, QtCore, QtGui
+                HAS_QT = True
+            except ImportError:
+                pass
 
 # Default configuration
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "BinaryLens")
@@ -303,9 +311,12 @@ if HAS_QT:
             form_layout.addRow("Model Name:", self.model_edit)
 
             # API Key row with show/hide toggle
+            self._echo_pwd = getattr(QtWidgets.QLineEdit.EchoMode, "Password", getattr(QtWidgets.QLineEdit, "Password", 2))
+            self._echo_norm = getattr(QtWidgets.QLineEdit.EchoMode, "Normal", getattr(QtWidgets.QLineEdit, "Normal", 0))
+
             self.api_key_edit = QtWidgets.QLineEdit()
             self.api_key_edit.setText(config.get("api_key", ""))
-            self.api_key_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+            self.api_key_edit.setEchoMode(self._echo_pwd)
             self.api_key_edit.setPlaceholderText("Leave empty for Ollama / LM Studio")
 
             key_container = QtWidgets.QWidget()
@@ -339,18 +350,22 @@ if HAS_QT:
             main_layout.addWidget(test_container)
 
             # Dialog buttons (Save / Cancel)
-            btn_box = QtWidgets.QDialogButtonBox(
-                QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel
-            )
-            btn_box.accepted.connect(self.accept)
-            btn_box.rejected.connect(self.reject)
-            main_layout.addWidget(btn_box)
+            btn_layout = QtWidgets.QHBoxLayout()
+            btn_layout.addStretch()
+            self.save_btn = QtWidgets.QPushButton("Save")
+            self.save_btn.setDefault(True)
+            self.save_btn.clicked.connect(self.accept)
+            self.cancel_btn = QtWidgets.QPushButton("Cancel")
+            self.cancel_btn.clicked.connect(self.reject)
+            btn_layout.addWidget(self.save_btn)
+            btn_layout.addWidget(self.cancel_btn)
+            main_layout.addLayout(btn_layout)
 
         def _toggle_key_visibility(self, checked):
             if checked:
-                self.api_key_edit.setEchoMode(QtWidgets.QLineEdit.Normal)
+                self.api_key_edit.setEchoMode(self._echo_norm)
             else:
-                self.api_key_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+                self.api_key_edit.setEchoMode(self._echo_pwd)
 
         def _on_preset_changed(self, idx):
             if 0 <= idx < len(self.presets_list):
@@ -564,8 +579,9 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 except Exception:
                     pass
                 dialog = QtSettingsDialog(self.config, parent=parent)
-                res = dialog.exec_() if hasattr(dialog, "exec_") else dialog.exec()
-                if res == QtWidgets.QDialog.Accepted:
+                res = dialog.exec() if hasattr(dialog, "exec") else dialog.exec_()
+                accepted_code = getattr(QtWidgets.QDialog.DialogCode, "Accepted", getattr(QtWidgets.QDialog, "Accepted", 1))
+                if res == 1 or res == accepted_code:
                     vals = dialog.get_values()
                     self.config.update(vals)
                     save_config(self.config)
