@@ -111,14 +111,14 @@ bool HandleModelActions(const char* action_name) {
     }
     if (strcmp(action_name, "preset_opencode_go") == 0) {
         WriteRegistryData(sub_key, "custom_base_url", "https://opencode.ai/zen/go/v1");
-        WriteRegistryData(sub_key, "model_to_use", "deepseek-v4-pro");
-        info("BinaryLens: Base URL set to OpenCode Go (https://opencode.ai/zen/go/v1)\n");
+        WriteRegistryData(sub_key, "model_to_use", "deepseek-v4-flash");
+        info("BinaryLens: Base URL set to OpenCode Go (https://opencode.ai/zen/go/v1), model set to deepseek-v4-flash\n");
         return true;
     }
     if (strcmp(action_name, "preset_opencode_zen") == 0) {
         WriteRegistryData(sub_key, "custom_base_url", "https://opencode.ai/zen/v1");
-        WriteRegistryData(sub_key, "model_to_use", "deepseek-v4-pro");
-        info("BinaryLens: Base URL set to OpenCode Zen (https://opencode.ai/zen/v1)\n");
+        WriteRegistryData(sub_key, "model_to_use", "deepseek-v4-flash");
+        info("BinaryLens: Base URL set to OpenCode Zen (https://opencode.ai/zen/v1), model set to deepseek-v4-flash\n");
         return true;
     }
 

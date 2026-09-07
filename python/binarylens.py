@@ -376,10 +376,10 @@ if HAS_QT:
                 if url:
                     self.base_url_edit.setText(url)
                 cur_m = self.model_edit.text().strip()
-                known_defaults = {"", "llama3", "gemini-2.5-pro", "gemini-2.5-flash", "deepseek-chat", "deepseek-v4-pro", "gpt-4o-mini", "local-model"}
+                known_defaults = {"", "llama3", "gemini-2.5-pro", "gemini-2.5-flash", "deepseek-chat", "deepseek-v4-pro", "deepseek-v4-flash", "gpt-4o-mini", "local-model"}
                 if cur_m in known_defaults:
                     if "OpenCode" in p_name:
-                        self.model_edit.setText("deepseek-v4-pro")
+                        self.model_edit.setText("deepseek-v4-flash")
                     elif "Gemini" in p_name:
                         self.model_edit.setText("gemini-2.5-pro")
                     elif "DeepSeek" in p_name:
