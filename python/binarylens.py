@@ -550,11 +550,9 @@ if HAS_QT:
             layout.addLayout(btn_layout)
 
         def _handle_stop(self):
-            self.stop_btn.setEnabled(False)
-            self.stop_btn.setText("Stopping...")
-            self.status_lbl.setText("Stopping after current batch...")
             if self.on_stop_cb:
                 self.on_stop_cb()
+            self.close()
 
         def update_progress(self, batch_num: int, total_batches: int, renamed_count: int):
             self.pbar.setValue(batch_num)
@@ -562,23 +560,11 @@ if HAS_QT:
             self.stats_lbl.setText(f"Renamed: {renamed_count} functions")
 
         def mark_finished(self, total_renamed: int, aborted: bool = False):
-            self.stop_btn.setEnabled(True)
-            self.stop_btn.setText("Close")
-            try:
-                self.stop_btn.clicked.disconnect()
-            except Exception:
-                pass
-            self.stop_btn.clicked.connect(self.close)
-            if aborted:
-                self.status_lbl.setText("Analysis stopped by user.")
-            else:
-                self.status_lbl.setText("Analysis complete!")
-            self.stats_lbl.setText(f"Total renamed: {total_renamed} functions")
+            self.close()
 
         def closeEvent(self, event):
-            if self.stop_btn.text() != "Close":
-                if self.on_stop_cb:
-                    self.on_stop_cb()
+            if self.on_stop_cb:
+                self.on_stop_cb()
             event.accept()
 
 
@@ -737,7 +723,13 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             ida_kernwin.msg("[BinaryLens] No analysis is currently running.\n")
             return
         self.is_running = False
-        ida_kernwin.msg("[BinaryLens] Stop requested. Analysis will halt after the current batch finishes.\n")
+        if getattr(self, "progress_dialog", None):
+            try:
+                self.progress_dialog.close()
+                self.progress_dialog = None
+            except Exception:
+                pass
+        ida_kernwin.msg("[BinaryLens] Stop requested. Analysis halted.\n")
 
     def show_settings(self):
         if HAS_QT:
