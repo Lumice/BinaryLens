@@ -631,7 +631,27 @@ if HAS_QT:
             btn_layout.addStretch()
 
             self.stop_btn = QtWidgets.QPushButton("Stop Analysis")
-            self.stop_btn.setStyleSheet("padding: 6px 18px; font-weight: bold;")
+            self.stop_btn.setCursor(QtCore.Qt.PointingHandCursor)
+            self.stop_btn.setStyleSheet("""
+                QPushButton {
+                    padding: 6px 18px;
+                    font-weight: bold;
+                    border: 1px solid #d9534f;
+                    border-radius: 4px;
+                    background-color: transparent;
+                    color: #d9534f;
+                }
+                QPushButton:hover {
+                    background-color: #d9534f;
+                    color: #ffffff;
+                    border: 1px solid #c9302c;
+                }
+                QPushButton:pressed {
+                    background-color: #ac2925;
+                    color: #ffffff;
+                    border: 1px solid #ac2925;
+                }
+            """)
             self.stop_btn.clicked.connect(self._handle_stop)
             btn_layout.addWidget(self.stop_btn)
 
