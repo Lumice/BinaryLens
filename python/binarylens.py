@@ -63,6 +63,8 @@ DEFAULT_CONFIG = {
 ENDPOINT_PRESETS = {
     "Local: Ollama (http://localhost:11434/v1)": "http://localhost:11434/v1",
     "Local: LM Studio (http://localhost:1234/v1)": "http://localhost:1234/v1",
+    "Cloud: OpenCode Go (https://opencode.ai/zen/go/v1)": "https://opencode.ai/zen/go/v1",
+    "Cloud: OpenCode Zen (https://opencode.ai/zen/v1)": "https://opencode.ai/zen/v1",
     "Cloud: OpenAI (https://api.openai.com/v1)": "https://api.openai.com/v1",
     "Cloud: Google Gemini (https://generativelanguage.googleapis.com/v1beta/openai)": "https://generativelanguage.googleapis.com/v1beta/openai",
     "Cloud: DeepSeek (https://api.deepseek.com/v1)": "https://api.deepseek.com/v1",
@@ -374,9 +376,11 @@ if HAS_QT:
                 if url:
                     self.base_url_edit.setText(url)
                 cur_m = self.model_edit.text().strip()
-                known_defaults = {"", "llama3", "gemini-2.5-pro", "gemini-2.5-flash", "deepseek-chat", "gpt-4o-mini", "local-model"}
+                known_defaults = {"", "llama3", "gemini-2.5-pro", "gemini-2.5-flash", "deepseek-chat", "deepseek-v4-pro", "gpt-4o-mini", "local-model"}
                 if cur_m in known_defaults:
-                    if "Gemini" in p_name:
+                    if "OpenCode" in p_name:
+                        self.model_edit.setText("deepseek-v4-pro")
+                    elif "Gemini" in p_name:
                         self.model_edit.setText("gemini-2.5-pro")
                     elif "DeepSeek" in p_name:
                         self.model_edit.setText("deepseek-chat")

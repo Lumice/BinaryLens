@@ -48,6 +48,8 @@ You simply configure:
   - **LM Studio**: `http://localhost:1234/v1` (no API key required)
   - **vLLM / llama.cpp / LocalAI**: Point to your local endpoint `/v1`
 - **Cloud Providers**:
+  - **OpenCode Go**: `https://opencode.ai/zen/go/v1` (Curated coding models: `deepseek-v4-pro`, `qwen3.8-max`, `kimi-k3`)
+  - **OpenCode Zen**: `https://opencode.ai/zen/v1`
   - **OpenAI**: `https://api.openai.com/v1`
   - **Google Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai`
   - **DeepSeek**: `https://api.deepseek.com/v1`

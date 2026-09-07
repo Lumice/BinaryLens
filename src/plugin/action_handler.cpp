@@ -109,6 +109,18 @@ bool HandleModelActions(const char* action_name) {
         info("BinaryLens: Base URL set to OpenRouter\n");
         return true;
     }
+    if (strcmp(action_name, "preset_opencode_go") == 0) {
+        WriteRegistryData(sub_key, "custom_base_url", "https://opencode.ai/zen/go/v1");
+        WriteRegistryData(sub_key, "model_to_use", "deepseek-v4-pro");
+        info("BinaryLens: Base URL set to OpenCode Go (https://opencode.ai/zen/go/v1)\n");
+        return true;
+    }
+    if (strcmp(action_name, "preset_opencode_zen") == 0) {
+        WriteRegistryData(sub_key, "custom_base_url", "https://opencode.ai/zen/v1");
+        WriteRegistryData(sub_key, "model_to_use", "deepseek-v4-pro");
+        info("BinaryLens: Base URL set to OpenCode Zen (https://opencode.ai/zen/v1)\n");
+        return true;
+    }
 
     WriteRegistryData(sub_key, "model_to_use", action_name);
     info("BinaryLens: Active model set to '%s'\n", action_name);
@@ -267,6 +279,24 @@ const action_desc_t preset_openrouter_action = ACTION_DESC_LITERAL(
     -1
 );
 
+const action_desc_t preset_opencode_go_action = ACTION_DESC_LITERAL(
+    "BinaryLens:preset_opencode_go",
+    "OpenCode Go (https://opencode.ai/zen/go/v1)",
+    &model_handler,
+    nullptr,
+    nullptr,
+    -1
+);
+
+const action_desc_t preset_opencode_zen_action = ACTION_DESC_LITERAL(
+    "BinaryLens:preset_opencode_zen",
+    "OpenCode Zen (https://opencode.ai/zen/v1)",
+    &model_handler,
+    nullptr,
+    nullptr,
+    -1
+);
+
 const action_desc_t about_action = ACTION_DESC_LITERAL(
     "BinaryLens:about",
     "About",
@@ -306,7 +336,9 @@ plugmod_t* idaapi init() {
         !register_action(preset_openai_action)     ||
         !register_action(preset_gemini_action)     ||
         !register_action(preset_deepseek_action)   ||
-        !register_action(preset_openrouter_action)) {
+        !register_action(preset_openrouter_action) ||
+        !register_action(preset_opencode_go_action)||
+        !register_action(preset_opencode_zen_action)) {
 
         LogMessage(LOG_PATH, true, "[BinaryLens] ERROR: Failed to register actions.\n");
         return PLUGIN_SKIP;
@@ -329,6 +361,8 @@ plugmod_t* idaapi init() {
     // Presets
     attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_ollama", SETMENU_APP);
     attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_lmstudio", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_opencode_go", SETMENU_APP);
+    attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_opencode_zen", SETMENU_APP);
     attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_openai", SETMENU_APP);
     attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_gemini", SETMENU_APP);
     attach_action_to_menu("Edit/" ACTION_NAME "/Base URL Presets/", "BinaryLens:preset_deepseek", SETMENU_APP);
@@ -352,6 +386,8 @@ void idaapi term() {
     unregister_action("BinaryLens:set_api_key");
     unregister_action("BinaryLens:preset_ollama");
     unregister_action("BinaryLens:preset_lmstudio");
+    unregister_action("BinaryLens:preset_opencode_go");
+    unregister_action("BinaryLens:preset_opencode_zen");
     unregister_action("BinaryLens:preset_openai");
     unregister_action("BinaryLens:preset_gemini");
     unregister_action("BinaryLens:preset_deepseek");
