@@ -1052,32 +1052,50 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     return 1
                 ida_kernwin.execute_sync(sync_update_batch, ida_kernwin.MFF_FAST)
 
-                # Decompile batch functions in small slices on the main thread to keep UI responsive
+                # Decompile functions individually on main thread with MFF_READ to keep UI fluid
                 decompiled_chunks: List[str] = []
-                sub_chunk_size = 5
+                total_in_batch = len(batch)
+                model_name = self.config.get("model", "model")
 
-                for sub_i in range(0, len(batch), sub_chunk_size):
+                for idx, (ea, name) in enumerate(batch):
                     if not self.is_running:
                         break
-                    sub_batch = batch[sub_i:sub_i + sub_chunk_size]
 
-                    def decompile_slice():
-                        for ea, name in sub_batch:
-                            if not self.is_running:
-                                break
-                            f = ida_funcs.get_func(ea)
-                            if not f:
-                                continue
+                    # Update live status on the progress dialog
+                    def sync_status():
+                        if getattr(self, "progress_dialog", None):
+                            self.progress_dialog.status_lbl.setText(
+                                f"Batch {batch_num}/{total_batches}: Decompiling {idx + 1}/{total_in_batch} ({name})..."
+                            )
+                        if HAS_QT:
                             try:
-                                cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
-                                if cfunc:
-                                    lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
-                                    decompiled_chunks.append(truncate_pseudocode(lines, max_lines=150))
+                                QtWidgets.QApplication.processEvents()
                             except Exception:
-                                continue
+                                pass
                         return 1
 
-                    ida_kernwin.execute_sync(decompile_slice, ida_kernwin.MFF_WRITE)
+                    ida_kernwin.execute_sync(sync_status, ida_kernwin.MFF_FAST)
+
+                    # Decompile single function
+                    def decompile_single():
+                        f = ida_funcs.get_func(ea)
+                        if not f:
+                            return 1
+                        try:
+                            cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
+                            if cfunc:
+                                lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
+                                decompiled_chunks.append(truncate_pseudocode(lines, max_lines=150))
+                        except Exception:
+                            pass
+                        if HAS_QT:
+                            try:
+                                QtWidgets.QApplication.processEvents()
+                            except Exception:
+                                pass
+                        return 1
+
+                    ida_kernwin.execute_sync(decompile_single, ida_kernwin.MFF_READ)
 
                 if not self.is_running:
                     ida_kernwin.msg("[BinaryLens] Analysis cancelled by user.\n")
@@ -1101,6 +1119,15 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                         user_prompt = user_prompt[:cut_idx] + "\n\n// ... [Remaining batch functions truncated for length safety] ...\n"
                     else:
                         user_prompt = user_prompt[:300000] + "\n\n// ... [Remaining batch content truncated for length safety] ...\n"
+
+                def sync_query_status():
+                    if getattr(self, "progress_dialog", None):
+                        self.progress_dialog.status_lbl.setText(
+                            f"Batch {batch_num}/{total_batches}: Querying {model_name}..."
+                        )
+                    return 1
+
+                ida_kernwin.execute_sync(sync_query_status, ida_kernwin.MFF_FAST)
 
                 raw_resp = call_llm(
                     SUB_REN_SYS_PROMPT,
