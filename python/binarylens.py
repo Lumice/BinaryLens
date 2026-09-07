@@ -666,10 +666,19 @@ if HAS_QT:
                 self.on_stop_cb()
             self.close()
 
-        def update_progress(self, batch_num: int, total_batches: int, renamed_count: int):
+        def update_progress(self, batch_num: int, total_batches: int, renamed_count: int, elapsed_sec: Optional[float] = None):
             self.pbar.setValue(batch_num)
             self.status_lbl.setText(f"Batch {batch_num} of {total_batches}")
-            self.stats_lbl.setText(f"Renamed: {renamed_count} functions")
+            if elapsed_sec is not None:
+                mins = int(elapsed_sec // 60)
+                secs = int(elapsed_sec % 60)
+                if mins > 0:
+                    time_txt = f"{mins}m {secs:02d}s"
+                else:
+                    time_txt = f"{secs}s"
+                self.stats_lbl.setText(f"Renamed: {renamed_count} functions | Elapsed: {time_txt}")
+            else:
+                self.stats_lbl.setText(f"Renamed: {renamed_count} functions")
 
         def mark_finished(self, total_renamed: int, aborted: bool = False):
             self.close()
@@ -1063,6 +1072,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
     def _worker_rename_subs(self, targets: List[Tuple[int, str]], user_hint: str):
         self.is_running = True
+        start_time = time.time()
         try:
             batch_size = max(1, int(self.config.get("batch_size", 40)))
             total_renamed = 0
@@ -1079,9 +1089,10 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                 batch_num = (batch_start // batch_size) + 1
                 ida_kernwin.msg(f"[BinaryLens] Processing batch {batch_num}/{total_batches} ({len(batch)} functions)...\n")
 
+                cur_elapsed = time.time() - start_time
                 def sync_update_batch():
                     if getattr(self, "progress_dialog", None):
-                        self.progress_dialog.update_progress(batch_num, total_batches, total_renamed)
+                        self.progress_dialog.update_progress(batch_num, total_batches, total_renamed, cur_elapsed)
                     return 1
                 ida_kernwin.execute_sync(sync_update_batch, ida_kernwin.MFF_FAST)
 
@@ -1212,17 +1223,27 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
                 ida_kernwin.execute_sync(apply_batch, ida_kernwin.MFF_WRITE)
 
+                cur_elapsed = time.time() - start_time
                 def sync_update_count():
                     if getattr(self, "progress_dialog", None):
-                        self.progress_dialog.update_progress(batch_num, total_batches, total_renamed)
+                        self.progress_dialog.update_progress(batch_num, total_batches, total_renamed, cur_elapsed)
                     return 1
                 ida_kernwin.execute_sync(sync_update_count, ida_kernwin.MFF_FAST)
 
                 time.sleep(0.05)
 
-            msg_str = f"BinaryLens: Analysis complete! Successfully renamed {total_renamed} functions."
+            total_time = time.time() - start_time
+            mins = int(total_time // 60)
+            secs = total_time % 60
+            if mins > 0:
+                elapsed_str = f"{mins}m {secs:.1f}s ({total_time:.1f}s)"
+            else:
+                elapsed_str = f"{total_time:.1f}s"
+
             if not self.is_running:
-                msg_str = f"BinaryLens: Analysis stopped by user. Successfully renamed {total_renamed} functions."
+                msg_str = f"BinaryLens: Analysis stopped by user. Successfully renamed {total_renamed} functions in {elapsed_str}."
+            else:
+                msg_str = f"BinaryLens: Analysis complete! Successfully renamed {total_renamed} functions in {elapsed_str}."
             ida_kernwin.msg(f"\n[BinaryLens] {msg_str}\n")
 
             def notify_done():
@@ -1258,6 +1279,7 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         ).start()
 
     def _worker_rename_vars(self, func_ea: int, code_str: str):
+        start_time = time.time()
         ida_kernwin.msg(f"[BinaryLens] Analyzing variables for function at 0x{func_ea:X}...\n")
         raw_resp = call_llm(
             VAR_REN_SYS_PROMPT,
@@ -1297,7 +1319,8 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     ida_bytes.set_cmt(func_ea, summary, False)
 
             vdui.refresh_view(True)
-            ida_kernwin.msg(f"[BinaryLens] Renamed {renamed_count} variables.\n")
+            elapsed = time.time() - start_time
+            ida_kernwin.msg(f"[BinaryLens] Renamed {renamed_count} variables in {elapsed:.2f}s.\n")
             return 1
 
         ida_kernwin.execute_sync(apply_var_renames, ida_kernwin.MFF_WRITE)
@@ -1313,12 +1336,14 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
         func_name = ida_funcs.get_func_name(vdui.cfunc.entry_ea)
 
         def worker():
+            start_time = time.time()
             ida_kernwin.msg(f"[BinaryLens] Generating explanation for {func_name}...\n")
             resp = call_llm(EXPLAIN_SYS_PROMPT, code_str, self.config, on_log=ida_kernwin.msg)
+            elapsed = time.time() - start_time
             if resp:
-                ida_kernwin.msg(f"\n========== BinaryLens: Explanation for {func_name} ==========\n\n{resp}\n\n============================================================\n")
+                ida_kernwin.msg(f"\n========== BinaryLens: Explanation for {func_name} (completed in {elapsed:.2f}s) ==========\n\n{resp}\n\n============================================================\n")
             else:
-                ida_kernwin.msg(f"[BinaryLens] Failed to generate explanation for {func_name}.\n")
+                ida_kernwin.msg(f"[BinaryLens] Failed to generate explanation for {func_name} (after {elapsed:.2f}s).\n")
 
         threading.Thread(target=worker, daemon=True).start()
 
