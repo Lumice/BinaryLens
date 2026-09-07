@@ -278,7 +278,7 @@ BinaryLens Configuration
                 "id_base_url": ida_kernwin.Form.StringInput(value=config.get("base_url", ""), width=60),
                 "id_model": ida_kernwin.Form.StringInput(value=config.get("model", ""), width=60),
                 "id_api_key": ida_kernwin.Form.StringInput(value=config.get("api_key", ""), width=60),
-                "id_batch_size": ida_kernwin.Form.NumericInput(value=config.get("batch_size", 40), tp=ida_kernwin.Form.FT_INT),
+                "id_batch_size": ida_kernwin.Form.NumericInput(value=config.get("batch_size", 40), tp=ida_kernwin.Form.FT_DEC),
             }
         )
 
