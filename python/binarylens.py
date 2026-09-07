@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     "max_tokens_per_req": 128000,
     "timeout_sec": 180,
     "reasoning_effort": "none",
+    "hint_history": [],
 }
 
 ENDPOINT_PRESETS = {
@@ -134,6 +135,8 @@ def load_config() -> dict:
                 data = json.load(f)
                 config = DEFAULT_CONFIG.copy()
                 config.update(data)
+                if not isinstance(config.get("hint_history"), list):
+                    config["hint_history"] = []
                 return config
         except Exception as e:
             ida_kernwin.msg(f"[BinaryLens] Warning: Failed to load config: {e}\n")
@@ -148,6 +151,19 @@ def save_config(config: dict) -> bool:
     except Exception as e:
         ida_kernwin.msg(f"[BinaryLens] Error saving config: {e}\n")
         return False
+
+def add_hint_to_history(config: dict, hint: str) -> None:
+    """Add a hint string to recent hint history, deduplicating and moving to top."""
+    hint = hint.strip()
+    if not hint:
+        return
+    history = config.get("hint_history", [])
+    if not isinstance(history, list):
+        history = []
+    history = [h for h in history if h != hint]
+    history.insert(0, hint)
+    config["hint_history"] = history[:25]
+    save_config(config)
 
 def sanitize_identifier(name: str) -> str:
     """Ensure a string is a valid C/IDA identifier."""
@@ -582,6 +598,93 @@ if HAS_QT:
             event.accept()
 
 
+    class QtTargetHintDialog(QtWidgets.QDialog):
+        """Dialog with a history dropdown for target hints before batch renaming."""
+        def __init__(self, config: dict, parent=None):
+            super().__init__(parent)
+            self.config = config
+            self.setWindowTitle("BinaryLens - Subroutine Analysis")
+            self.setMinimumWidth(540)
+
+            layout = QtWidgets.QVBoxLayout(self)
+            layout.setSpacing(12)
+
+            title_label = QtWidgets.QLabel("<b>Target Hint & Context</b>")
+            title_label.setStyleSheet("font-size: 11pt;")
+            subtitle_label = QtWidgets.QLabel(
+                "Provide optional background info or domain hints to guide the LLM.\n"
+                "Select a previous input from the dropdown or type a new one."
+            )
+            subtitle_label.setStyleSheet("color: gray; margin-bottom: 4px;")
+            layout.addWidget(title_label)
+            layout.addWidget(subtitle_label)
+
+            form_layout = QtWidgets.QFormLayout()
+            self.combo = QtWidgets.QComboBox()
+            self.combo.setEditable(True)
+            no_insert = getattr(QtWidgets.QComboBox.InsertPolicy, "NoInsert", getattr(QtWidgets.QComboBox, "NoInsert", 0))
+            self.combo.setInsertPolicy(no_insert)
+
+            history = self.config.get("hint_history", [])
+            if isinstance(history, list):
+                for item in history:
+                    if isinstance(item, str) and item.strip():
+                        self.combo.addItem(item.strip())
+
+            line_edit = self.combo.lineEdit()
+            if line_edit:
+                line_edit.setPlaceholderText("(Optional) Type or select background context / domain hints...")
+                line_edit.returnPressed.connect(self.accept)
+
+            if self.combo.count() > 0:
+                self.combo.setCurrentIndex(0)
+                if line_edit:
+                    line_edit.selectAll()
+            else:
+                self.combo.setCurrentIndex(-1)
+                if line_edit:
+                    line_edit.clear()
+
+            combo_container = QtWidgets.QWidget()
+            combo_row = QtWidgets.QHBoxLayout(combo_container)
+            combo_row.setContentsMargins(0, 0, 0, 0)
+            combo_row.addWidget(self.combo, 1)
+
+            self.clear_btn = QtWidgets.QPushButton("Clear History")
+            self.clear_btn.setToolTip("Clear saved hint history")
+            self.clear_btn.clicked.connect(self._clear_history)
+            combo_row.addWidget(self.clear_btn)
+
+            form_layout.addRow("Target Hint:", combo_container)
+            layout.addLayout(form_layout)
+
+            btn_layout = QtWidgets.QHBoxLayout()
+            btn_layout.addStretch()
+
+            self.start_btn = QtWidgets.QPushButton("Start Analysis")
+            self.start_btn.setDefault(True)
+            self.start_btn.clicked.connect(self.accept)
+
+            self.cancel_btn = QtWidgets.QPushButton("Cancel")
+            self.cancel_btn.clicked.connect(self.reject)
+
+            btn_layout.addWidget(self.start_btn)
+            btn_layout.addWidget(self.cancel_btn)
+            layout.addLayout(btn_layout)
+
+        def _clear_history(self):
+            self.combo.clear()
+            self.config["hint_history"] = []
+            save_config(self.config)
+            line_edit = self.combo.lineEdit()
+            if line_edit:
+                line_edit.clear()
+                line_edit.setPlaceholderText("(Optional) Type or select background context / domain hints...")
+
+        def get_hint(self) -> str:
+            return self.combo.currentText().strip()
+
+
 class IdaFormSettingsDialog(ida_kernwin.Form):
     """Fallback configuration dialog using native IDA Form."""
     def __init__(self, config: dict):
@@ -812,24 +915,29 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     parent = QtWidgets.QApplication.activeWindow()
                 except Exception:
                     pass
-                text, ok = QtWidgets.QInputDialog.getText(
-                    parent,
-                    "BinaryLens",
-                    "Target Hint (Optional background info or domain context):",
-                    QtWidgets.QLineEdit.Normal,
-                    ""
-                )
-                if not ok:
+                dialog = QtTargetHintDialog(self.config, parent=parent)
+                res = dialog.exec() if hasattr(dialog, "exec") else dialog.exec_()
+                accepted_code = getattr(QtWidgets.QDialog.DialogCode, "Accepted", getattr(QtWidgets.QDialog, "Accepted", 1))
+                if res != 1 and res != accepted_code:
                     return
-                user_hint = text.strip()
-            except Exception:
+                user_hint = dialog.get_hint()
+                if user_hint:
+                    add_hint_to_history(self.config, user_hint)
+            except Exception as e:
+                ida_kernwin.msg(f"[BinaryLens] Hint dialog error, falling back: {e}\n")
                 user_hint = ida_kernwin.ask_str("", -1, "(Optional) Provide background info or target hints for the binary:")
                 if user_hint is None:
                     return
+                user_hint = user_hint.strip()
+                if user_hint:
+                    add_hint_to_history(self.config, user_hint)
         else:
             user_hint = ida_kernwin.ask_str("", -1, "(Optional) Provide background info or target hints for the binary:")
             if user_hint is None:
                 return
+            user_hint = user_hint.strip()
+            if user_hint:
+                add_hint_to_history(self.config, user_hint)
 
         # 1. Collect candidate sub_* functions on the main thread
         targets: List[Tuple[int, str]] = []

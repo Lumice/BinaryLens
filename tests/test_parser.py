@@ -80,10 +80,31 @@ def test_truncation():
     assert "line 999" in truncated
     print("[PASS] Pseudocode truncation")
 
+def test_hint_history():
+    from unittest.mock import patch
+    cfg = {"hint_history": ["old_hint_1", "old_hint_2"]}
+    with patch.object(binarylens, "save_config", return_value=True):
+        # Adding new hint moves to front
+        binarylens.add_hint_to_history(cfg, "new_hint")
+        assert cfg["hint_history"][0] == "new_hint"
+        assert len(cfg["hint_history"]) == 3
+
+        # Re-adding existing hint deduplicates and promotes to front
+        binarylens.add_hint_to_history(cfg, "old_hint_2")
+        assert cfg["hint_history"][0] == "old_hint_2"
+        assert cfg["hint_history"][1] == "new_hint"
+        assert len(cfg["hint_history"]) == 3
+
+        # Whitespace/empty is ignored
+        binarylens.add_hint_to_history(cfg, "   ")
+        assert len(cfg["hint_history"]) == 3
+    print("[PASS] Hint history deduplication and persistence")
+
 if __name__ == "__main__":
     test_json_parsing()
     test_ini_parsing()
     test_variable_parsing()
     test_identifier_sanitization()
     test_truncation()
+    test_hint_history()
     print("\nAll unit tests passed successfully!")
