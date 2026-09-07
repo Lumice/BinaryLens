@@ -6,6 +6,16 @@
     "entryPoint": "binarylens.py",
     "description": "An IDA plugin that uses language models to speed up binary analysis with batch subroutine renaming, variable inference, and explanations.",
     "version": "1.2.0",
+    "license": "MIT",
+    "keywords": [
+      "ai",
+      "llm",
+      "decompiler",
+      "pseudocode",
+      "reverse-engineering",
+      "renaming",
+      "hexrays"
+    ],
     "idaVersions": [
       "9.0",
       "9.1",
