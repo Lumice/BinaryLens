@@ -1,6 +1,15 @@
 # BinaryLens (Modernized Fork)
 
+[![GitHub stars](https://img.shields.io/github/stars/Lumice/BinaryLens?style=social)](https://github.com/Lumice/BinaryLens)
+[![IDA Pro](https://img.shields.io/badge/IDA%20Pro-8.x%20%7C%209.x-blue)](https://hex-rays.com/ida-pro/)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+*Forked and modernized from the original [Berk000x/BinaryLens](https://github.com/Berk000x/BinaryLens).*
+
 **BinaryLens** is an IDA Pro plugin that accelerates reverse engineering by using large language models to automatically rename subroutines, reconstruct variable names, explain decompiled functions, and summarize binary components.
+
+![](imgs/showcase.gif?raw=true)
 
 Compatible with **IDA Pro 8.x and 9.x** (including IDA Pro 9.1 / 9.4 on Windows 10 & 11).
 

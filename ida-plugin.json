@@ -5,8 +5,8 @@
     "entryPoint": "BinaryLens",
     "categories": ["api-scripting-and-automation", "collaboration-and-productivity", "malware-analysis"],
     "logoPath": ".",
-    "description": "An IDA plugin that uses language models to speed up binary analysis.",
-    "idaVersions": "9.1",
-    "version": "1.0.1"
+    "description": "An IDA plugin that uses language models to speed up binary analysis with batch subroutine renaming and local variable inference.",
+    "idaVersions": ">=8.0",
+    "version": "1.2.0"
   }
 }
