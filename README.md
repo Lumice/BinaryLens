@@ -7,7 +7,7 @@
 
 *Forked and modernized from the original [Berk000x/BinaryLens](https://github.com/Berk000x/BinaryLens).*
 
-**BinaryLens** is an IDA Pro plugin that accelerates reverse engineering by using large language models to automatically rename subroutines, reconstruct variable names, explain decompiled functions, and summarize binary components.
+**BinaryLens** is an IDA Pro plugin that accelerates reverse engineering by using LLMs to automatically rename subroutines, reconstruct variable names, explain decompiled functions, and summarize binary components.
 
 ![](imgs/showcase.gif?raw=true)
 
