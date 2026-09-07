@@ -15,6 +15,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+import uuid
 from typing import Dict, List, Optional, Tuple, Any
 
 # IDA Pro modules
@@ -249,6 +250,13 @@ def call_llm(
     req = urllib.request.Request(endpoint, data=body_bytes, method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) BinaryLens/2.0")
+    if "opencode" in endpoint.lower():
+        session_id = getattr(call_llm, "_session_id", None)
+        if not session_id:
+            session_id = f"bl_{uuid.uuid4().hex[:16]}"
+            setattr(call_llm, "_session_id", session_id)
+        req.add_header("x-opencode-session", session_id)
+        req.add_header("x-opencode-client", "binarylens")
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
 

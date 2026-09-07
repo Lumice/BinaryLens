@@ -210,8 +210,13 @@ std::string GetResponseFromModel(
     ThreadLogMessage(LOG_PATH, 0, "Client created for host: %s\n", scheme_host_port.c_str());
 
     httplib::Headers headers = {
-        {"Content-Type", "application/json"}
+        {"Content-Type", "application/json"},
+        {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) BinaryLens/2.0"}
     };
+    if (chat_endpoint.find("opencode") != std::string::npos || scheme_host_port.find("opencode") != std::string::npos) {
+        headers.emplace("x-opencode-session", "bl_ida_session");
+        headers.emplace("x-opencode-client", "binarylens");
+    }
     if (!api_key.empty()) {
         headers.emplace("Authorization", "Bearer " + api_key);
     }
