@@ -13,6 +13,7 @@ import re
 import ssl
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -865,6 +866,8 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
             batch_size = max(1, int(self.config.get("batch_size", 40)))
             total_renamed = 0
             total_batches = (len(targets) + batch_size - 1) // batch_size
+            consecutive_failures = 0
+            decomp_flags = ida_hexrays.DECOMP_NO_WAIT | ida_hexrays.DECOMP_WARNINGS
 
             for batch_start in range(0, len(targets), batch_size):
                 if not self.is_running:
@@ -886,11 +889,18 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
                 def decompile_batch():
                     for ea, name in batch:
+                        if not self.is_running:
+                            break
+                        if HAS_QT:
+                            try:
+                                QtWidgets.QApplication.processEvents()
+                            except Exception:
+                                pass
                         f = ida_funcs.get_func(ea)
                         if not f:
                             continue
                         try:
-                            cfunc = ida_hexrays.decompile(f)
+                            cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
                             if cfunc:
                                 lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
                                 decompiled_chunks.append("\n".join(lines))
@@ -900,8 +910,13 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
                 ida_kernwin.execute_sync(decompile_batch, ida_kernwin.MFF_WRITE)
 
+                if not self.is_running:
+                    ida_kernwin.msg("[BinaryLens] Analysis cancelled by user.\n")
+                    break
+
                 if not decompiled_chunks:
                     ida_kernwin.msg(f"[BinaryLens] Batch {batch_num}/{total_batches}: No functions could be decompiled, skipping.\n")
+                    time.sleep(0.5)
                     continue
 
                 user_prompt = ""
@@ -918,7 +933,15 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
 
                 if not raw_resp:
                     ida_kernwin.msg(f"[BinaryLens] Batch {batch_num}/{total_batches}: Failed to get response from model.\n")
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        ida_kernwin.msg("[BinaryLens] Halting analysis: 3 consecutive batches failed. Check your API key or model settings.\n")
+                        self.is_running = False
+                        break
+                    time.sleep(1.5)
                     continue
+
+                consecutive_failures = 0
 
                 summary, renames = parse_model_response(raw_resp)
                 if summary:
@@ -945,6 +968,8 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                         self.progress_dialog.update_progress(batch_num, total_batches, total_renamed)
                     return 1
                 ida_kernwin.execute_sync(sync_update_count, ida_kernwin.MFF_FAST)
+
+                time.sleep(0.05)
 
             msg_str = f"BinaryLens: Analysis complete! Successfully renamed {total_renamed} functions."
             if not self.is_running:
