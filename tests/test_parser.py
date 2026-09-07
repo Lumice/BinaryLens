@@ -100,6 +100,33 @@ def test_hint_history():
         assert len(cfg["hint_history"]) == 3
     print("[PASS] Hint history deduplication and persistence")
 
+def test_balanced_json_extraction():
+    # Chatty text with conversational opening, extra braces in text, and trailing remarks
+    chatter_resp = """Certainly! Here is my analysis for your component {math_engine}:
+    
+    ```json
+    {
+        "summary": "Vector math library",
+        "renamed_functions": {
+            "sub_140001000": "Vec3DotProduct",
+            "sub_140001200": "Vec3Normalize"
+        }
+    }
+    ```
+    
+    Hope this helps with your reversing! (Notes: {keep up the good work})"""
+    summary, renames = binarylens.parse_model_response(chatter_resp)
+    assert summary == "Vector math library"
+    assert renames["sub_140001000"] == "Vec3DotProduct"
+    assert renames["sub_140001200"] == "Vec3Normalize"
+
+    # Raw balanced JSON without code fences but with chatter around it
+    raw_chatter = """Here is the mapping: { "summary": "Crypto routine", "renamed_functions": { "sub_100": "AesEncrypt" } } cheers."""
+    summary2, renames2 = binarylens.parse_model_response(raw_chatter)
+    assert summary2 == "Crypto routine"
+    assert renames2["sub_100"] == "AesEncrypt"
+    print("[PASS] Balanced JSON extraction with chatter")
+
 if __name__ == "__main__":
     test_json_parsing()
     test_ini_parsing()
@@ -107,4 +134,5 @@ if __name__ == "__main__":
     test_identifier_sanitization()
     test_truncation()
     test_hint_history()
+    test_balanced_json_extraction()
     print("\nAll unit tests passed successfully!")

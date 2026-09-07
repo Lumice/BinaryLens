@@ -184,6 +184,40 @@ def truncate_pseudocode(lines: List[str], max_lines: int = 150) -> str:
     omitted = len(lines) - max_lines
     return "\n".join(head) + f"\n\n// ... [{omitted} lines truncated for length] ...\n\n" + "\n".join(tail)
 
+def extract_balanced_json(text: str) -> Optional[dict]:
+    """Finds the first balanced { ... } JSON object in text, handling strings and escape sequences."""
+    start = text.find('{')
+    while start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape:
+                escape = False
+                continue
+            if c == '\\':
+                escape = True
+                continue
+            if c == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start:i+1]
+                        try:
+                            res = json.loads(candidate)
+                            if isinstance(res, dict):
+                                return res
+                        except Exception:
+                            break
+        start = text.find('{', start + 1)
+    return None
+
 def parse_model_response(raw_text: str) -> Tuple[str, Dict[str, str]]:
     """
     Extracts summary and mapping (functions or variables) from JSON or INI format.
@@ -194,31 +228,50 @@ def parse_model_response(raw_text: str) -> Tuple[str, Dict[str, str]]:
 
     text = raw_text.strip()
 
-    # 1. Try extracting JSON
-    json_match = re.search(r'\{.*\}', text, re.DOTALL)
-    if json_match:
+    # 1. Try extracting JSON via markdown code fences first
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    data = None
+    if fence_match:
         try:
-            data = json.loads(json_match.group(0))
-            summary = data.get("summary", "")
-            
-            # Function mappings
-            funcs = data.get("renamed_functions") or data.get("RenamedFunctions") or data.get("functions")
-            if isinstance(funcs, dict):
-                for k, v in funcs.items():
-                    if isinstance(k, str) and isinstance(v, str):
-                        mapping[k.strip()] = sanitize_identifier(v)
-
-            # Variable mappings
-            vars_dict = data.get("renamed_variables") or data.get("RenamedLocals") or data.get("variables")
-            if isinstance(vars_dict, dict):
-                for k, v in vars_dict.items():
-                    if isinstance(k, str) and isinstance(v, str):
-                        mapping[k.strip()] = sanitize_identifier(v)
-
-            if mapping:
-                return summary, mapping
+            parsed = json.loads(fence_match.group(1))
+            if isinstance(parsed, dict):
+                data = parsed
         except Exception:
             pass
+
+    # 2. Try balanced brace extraction if fence wasn't present or failed
+    if not data:
+        data = extract_balanced_json(text)
+
+    # 3. Fallback to greedy regex if balanced didn't succeed
+    if not data:
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(0))
+                if isinstance(parsed, dict):
+                    data = parsed
+            except Exception:
+                pass
+
+    if data:
+        summary = data.get("summary", "")
+        # Function mappings
+        funcs = data.get("renamed_functions") or data.get("RenamedFunctions") or data.get("functions")
+        if isinstance(funcs, dict):
+            for k, v in funcs.items():
+                if isinstance(k, str) and isinstance(v, str):
+                    mapping[k.strip()] = sanitize_identifier(v)
+
+        # Variable mappings
+        vars_dict = data.get("renamed_variables") or data.get("RenamedLocals") or data.get("variables")
+        if isinstance(vars_dict, dict):
+            for k, v in vars_dict.items():
+                if isinstance(k, str) and isinstance(v, str):
+                    mapping[k.strip()] = sanitize_identifier(v)
+
+        if mapping:
+            return summary, mapping
 
     # 2. Fallback: Parse INI style [RenamedFunctions] or [RenamedLocals]
     cur_section = ""
@@ -999,31 +1052,32 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     return 1
                 ida_kernwin.execute_sync(sync_update_batch, ida_kernwin.MFF_FAST)
 
-                # Decompile batch functions on the main thread via execute_sync
+                # Decompile batch functions in small slices on the main thread to keep UI responsive
                 decompiled_chunks: List[str] = []
+                sub_chunk_size = 5
 
-                def decompile_batch():
-                    for ea, name in batch:
-                        if not self.is_running:
-                            break
-                        if HAS_QT:
+                for sub_i in range(0, len(batch), sub_chunk_size):
+                    if not self.is_running:
+                        break
+                    sub_batch = batch[sub_i:sub_i + sub_chunk_size]
+
+                    def decompile_slice():
+                        for ea, name in sub_batch:
+                            if not self.is_running:
+                                break
+                            f = ida_funcs.get_func(ea)
+                            if not f:
+                                continue
                             try:
-                                QtWidgets.QApplication.processEvents()
+                                cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
+                                if cfunc:
+                                    lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
+                                    decompiled_chunks.append(truncate_pseudocode(lines, max_lines=150))
                             except Exception:
-                                pass
-                        f = ida_funcs.get_func(ea)
-                        if not f:
-                            continue
-                        try:
-                            cfunc = ida_hexrays.decompile(f, flags=decomp_flags)
-                            if cfunc:
-                                lines = [ida_lines.tag_remove(sl.line) for sl in cfunc.get_pseudocode()]
-                                decompiled_chunks.append(truncate_pseudocode(lines, max_lines=150))
-                        except Exception:
-                            continue
-                    return 1
+                                continue
+                        return 1
 
-                ida_kernwin.execute_sync(decompile_batch, ida_kernwin.MFF_WRITE)
+                    ida_kernwin.execute_sync(decompile_slice, ida_kernwin.MFF_WRITE)
 
                 if not self.is_running:
                     ida_kernwin.msg("[BinaryLens] Analysis cancelled by user.\n")
@@ -1039,9 +1093,14 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                     user_prompt += f"User context / hints: {user_hint}\n\n"
                 user_prompt += "Decompiled Functions:\n\n" + "\n\n/* ------------------ */\n\n".join(decompiled_chunks)
 
-                # Cap prompt size to prevent exceeding model context length
+                # Cap prompt size cleanly at function boundary to prevent exceeding model context length
                 if len(user_prompt) > 300000:
-                    user_prompt = user_prompt[:300000] + "\n\n// ... [Remaining batch content truncated for length safety] ...\n"
+                    sep = "\n\n/* ------------------ */\n\n"
+                    cut_idx = user_prompt.rfind(sep, 0, 300000)
+                    if cut_idx > 0:
+                        user_prompt = user_prompt[:cut_idx] + "\n\n// ... [Remaining batch functions truncated for length safety] ...\n"
+                    else:
+                        user_prompt = user_prompt[:300000] + "\n\n// ... [Remaining batch content truncated for length safety] ...\n"
 
                 raw_resp = call_llm(
                     SUB_REN_SYS_PROMPT,
@@ -1078,6 +1137,10 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                             if ida_name.set_name(ea, new_name, ida_name.SN_NOWARN | ida_name.SN_FORCE):
                                 total_renamed += 1
                                 ida_kernwin.msg(f"  [+] Renamed {orig_name} -> {new_name}\n")
+                                if summary:
+                                    pfn = ida_funcs.get_func(ea)
+                                    if pfn and not ida_funcs.get_func_cmt(pfn, False):
+                                        ida_funcs.set_func_cmt(pfn, f"Component: {summary}", False)
                     return 1
 
                 ida_kernwin.execute_sync(apply_batch, ida_kernwin.MFF_WRITE)
@@ -1159,7 +1222,11 @@ class BinaryLensPlugin(ida_idaapi.plugin_t):
                         ida_kernwin.msg(f"  [+] Renamed variable {var_name} -> {new_name}\n")
 
             if summary:
-                ida_bytes.set_cmt(func_ea, summary, False)
+                pfn = ida_funcs.get_func(func_ea)
+                if pfn:
+                    ida_funcs.set_func_cmt(pfn, summary, False)
+                else:
+                    ida_bytes.set_cmt(func_ea, summary, False)
 
             vdui.refresh_view(True)
             ida_kernwin.msg(f"[BinaryLens] Renamed {renamed_count} variables.\n")

@@ -28,3 +28,7 @@ Release/
 BinaryLensLog.txt
 *.log
 *.tmp
+
+# Release packages
+dist/
+releases/

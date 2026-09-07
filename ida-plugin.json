@@ -2,11 +2,23 @@
   "IDAMetadataDescriptorVersion": 1,
   "plugin": {
     "name": "BinaryLens",
-    "entryPoint": "BinaryLens",
-    "categories": ["api-scripting-and-automation", "collaboration-and-productivity", "malware-analysis"],
-    "logoPath": ".",
-    "description": "An IDA plugin that uses language models to speed up binary analysis with batch subroutine renaming and local variable inference.",
+    "entryPoint": "binarylens.py",
+    "description": "An IDA plugin that uses language models to speed up binary analysis with batch subroutine renaming, variable inference, and explanations.",
+    "version": "1.2.0",
     "idaVersions": ">=8.0",
-    "version": "1.2.0"
+    "categories": [
+      "api-scripting-and-automation",
+      "collaboration-and-productivity",
+      "malware-analysis"
+    ],
+    "authors": [
+      {
+        "name": "Lumice",
+        "url": "https://github.com/Lumice"
+      }
+    ],
+    "urls": {
+      "repository": "https://github.com/Lumice/BinaryLens"
+    }
   }
 }
