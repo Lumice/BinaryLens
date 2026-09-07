@@ -15,7 +15,7 @@ Compatible with **IDA Pro 8.x and 9.x** (including IDA Pro 9.1 / 9.4 on Windows 
 
 ---
 
-## ⚡ Quick Start: 2 Ways to Install
+## Quick Start: 2 Ways to Install
 
 ### Option 1: Drop-in IDAPython Plugin (Recommended, Zero-Compilation)
 No C++ compiler, IDA SDK, or external OpenSSL DLLs required!
@@ -32,7 +32,7 @@ No C++ compiler, IDA SDK, or external OpenSSL DLLs required!
 
 ---
 
-## 🚀 Supported Models & Providers
+## Supported Models & Providers
 
 BinaryLens connects to any OpenAI-compatible endpoint, commercial API, or local offline inference engine:
 
@@ -47,7 +47,7 @@ BinaryLens connects to any OpenAI-compatible endpoint, commercial API, or local 
 
 ---
 
-## 🎯 Features & Usage
+## Features & Usage
 
 1. **Rename all subroutines**:
    - Menu: **Edit → BinaryLens → Rename all subroutines**.
@@ -63,7 +63,7 @@ BinaryLens connects to any OpenAI-compatible endpoint, commercial API, or local 
 
 ---
 
-## 🛠️ Compiling the C++ Plugin (Optional)
+## Compiling the C++ Plugin (Optional)
 If building the native C++ DLL from source:
 1. Open `BinaryLens.sln` in Visual Studio 2022.
 2. Ensure you have the **IDA 9.x SDK** (`idasdk`) and **OpenSSL 3.x x64** installed.
