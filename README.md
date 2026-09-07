@@ -33,10 +33,10 @@ BinaryLens reads the decompiled C pseudocode of the active function and prints a
 
 * How to use: Right-click inside any pseudocode window and select `BinaryLens: Explain Function`.
 
-### 4. Floating Progress Window with Instant Stop
-When you start a batch analysis, a small floating tool window appears.
+### 4. Progress Window with Instant Stop
+When you start a batch analysis, a progress dialog appears.
 * It displays the current batch number, the total batches, and how many functions were renamed.
-* It stays on top in the corner of your screen without blocking you from navigating, scrolling, or clicking in IDA.
+* It stays attached to IDA so it does not float over other applications when you switch windows.
 * If you want to halt the process, click the `Stop Analysis` button. The window closes immediately and preserves all renames completed so far.
 * You can also click `Edit -> BinaryLens -> Stop analysis` from the menu at any time.
 
