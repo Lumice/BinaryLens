@@ -1,48 +1,63 @@
-# BinaryLens
-BinaryLens is an IDA plugin that speeds up binary analysis by using language models to rename all functions in a binary, explain binaries, analyze individual functions, rename variables, and more. It’s blazing fast and accurate compared to other tools out there. 
+# BinaryLens (Modernized Fork)
 
-We recommend using an IDA MCP server for smaller binaries, since this plugin is mainly meant for larger binaries, as it will finish in minutes what takes an MCP server hours.
+**BinaryLens** is an IDA Pro plugin that accelerates reverse engineering by using large language models to automatically rename subroutines, reconstruct variable names, explain decompiled functions, and summarize binary components.
 
-Here’s a simple example of the results:
+Compatible with **IDA Pro 8.x and 9.x** (including IDA Pro 9.1 / 9.4 on Windows 10 & 11).
 
-![](imgs/showcase.gif?raw=true)
+---
 
-## Setup
-You just need to place the two OpenSSL DLLs (**libcrypto-3-x64.dll** and **libssl-3-x64.dll**) in the directory where ida.exe is located, and put the **BinaryLens** DLL into IDA’s plugins folder.
+## ⚡ Quick Start: 2 Ways to Install
 
-BinaryLens DLL goes into: `%ProgramFiles%/IDA Professional 9.1/plugins`.
+### Option 1: Drop-in IDAPython Plugin (Recommended, Zero-Compilation)
+No C++ compiler, IDA SDK, or external OpenSSL DLLs required!
 
-OpenSSL DLLs go into: `%ProgramFiles%/IDA Professional 9.1`.
+1. Copy [`python/binarylens.py`](file:///C:/Users/hue/.gemini/antigravity/scratch/BinaryLens/python/binarylens.py) into your IDA plugins folder:
+   - **User plugins folder (Recommended)**: `%APPDATA%\Hex-Rays\IDA Pro\plugins\`
+   - **System plugins folder**: `%ProgramFiles%\IDA Professional 9.4\plugins\`
+2. Restart IDA Pro or open an IDB.
+3. Access **Edit → BinaryLens → Settings...** to choose your provider, enter your API key or configure a local Ollama endpoint.
 
-## Usage
-To select a model or set up your API key, go to the **Edit** menu in IDA, then **BinaryLens** → **Select Model**.
+### Option 2: Native C++ Plugin (`BinaryLens.dll`)
+1. Place **`libcrypto-3-x64.dll`** and **`libssl-3-x64.dll`** into the IDA root directory (e.g. `%ProgramFiles%/IDA Professional 9.4`).
+2. Copy the compiled **`BinaryLens.dll`** into `%ProgramFiles%/IDA Professional 9.4/plugins`.
 
-You can start the binary analysis through the **Edit** menu (**BinaryLens** → **Rename all subroutines**). For function analysis, use the context menu of IDA’s **pseudocode** window (**BinaryLens** → **Rename Variables**).
+---
 
-## Supported models
-[OpenAI](https://platform.openai.com/docs/models)
-- GPT-5
+## 🚀 Supported Models & Providers
 
-[Google Gemini](https://ai.google.dev/gemini-api/docs)
-- Gemini-2.5-pro (recommended)
+BinaryLens connects to any OpenAI-compatible endpoint, commercial API, or local offline inference engine:
 
-[Deepseek](https://api-docs.deepseek.com/quick_start/pricing)
-- Deepseek-chat
+| Provider | Supported Models | Notes |
+| :--- | :--- | :--- |
+| **Google Gemini** | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-1.5-pro` | Fast, high-capacity context window. |
+| **DeepSeek** | `deepseek-chat` (V3), `deepseek-reasoner` (R1) | Exceptional coding and low-level reasoning. |
+| **OpenAI** | `gpt-4o`, `gpt-4o-mini`, `o3-mini`, `gpt-5` | Industry standard accuracy. |
+| **OpenRouter** | `anthropic/claude-3.7-sonnet`, `deepseek/deepseek-r1`, `meta-llama/llama-3.3-70b` | Access any model via unified API key. |
+| **Ollama (Offline/Local)** | `qwen2.5-coder:32b`, `deepseek-coder-v2`, `llama3.3` | **100% private**, runs locally on `http://localhost:11434/v1` without an API key. |
+| **Custom / LM Studio / vLLM** | Any custom model identifier | Point to your custom Base URL and port. |
 
-## Compatibility
-The plugin requires access to the Hex-Rays decompiler to function.
-Tested on Windows 10/11 with IDA 9.1 Pro. Mainly tested on x86 binaries but should also work with other architectures.
+---
 
-## Compiling the source code
-You need to link **OpenSSL** and **IDA’s SDK** in Visual Studio’s project settings. The necessary paths are already included, you just need to replace them with your own paths. Also make sure to compile the project in x64.
+## 🎯 Features & Usage
 
-## FAQ
-#### Why not add more model options?
-We have tested many models, but only the currently supported ones passed our checks. Adding new models is simple, but not recommended.
+1. **Rename all subroutines**:
+   - Menu: **Edit → BinaryLens → Rename all subroutines**.
+   - Automatically decompiles `sub_*` routines, batches them to preserve context while avoiding timeouts, and assigns descriptive PascalCase names (e.g., `sub_140001000` $\rightarrow$ `DecryptAesPayload`).
+2. **Rename Variables**:
+   - In Hex-Rays Pseudocode view: **Right-click → BinaryLens: Rename Variables**.
+   - Semantically renames obscure local variables (`a1`, `v1`, `v2` $\rightarrow$ `socket_fd`, `buffer_len`, `key_schedule`).
+3. **Explain Function**:
+   - In Hex-Rays Pseudocode view: **Right-click → BinaryLens: Explain Function**.
+   - Generates an executive summary, argument breakdown, and security analysis.
+4. **Interactive Settings**:
+   - Menu: **Edit → BinaryLens → Settings...** (in IDAPython) or **Edit → BinaryLens → Select model** (in C++).
 
-#### Why not send the decompiled functions chunk by chunk?
-The models cannot accurately rename functions without analyzing the entire binary at once.
+---
 
-## TODO
-1. We already slightly compress the functions before sending, but better compression methods could be added.
-2. Allow interactive chat with the model on a selected function.
+## 🛠️ Compiling the C++ Plugin (Optional)
+If building the native C++ DLL from source:
+1. Open `BinaryLens.sln` in Visual Studio 2022.
+2. Ensure you have the **IDA 9.x SDK** (`idasdk`) and **OpenSSL 3.x x64** installed.
+3. Update `AdditionalIncludeDirectories` and `AdditionalDependencies` in project settings to match your local SDK paths.
+4. Build in **Release | x64**.
+

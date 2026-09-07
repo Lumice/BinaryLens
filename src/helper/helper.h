@@ -16,9 +16,11 @@ std::string GetResponseFromModel(
 	std::string model,
 	std::string api_key,
 	std::string system_prompt,
-	std::string user_prompt
+	std::string user_prompt,
+	std::string custom_base_url = ""
 );
 
 void RemoveSubstring(std::string& str, const std::string& target);
 bool ContainsSubstring(const std::string& str, const std::string& target);
 void TrimStr(std::string& s);
+std::string CleanModelResponse(const std::string& raw_response);

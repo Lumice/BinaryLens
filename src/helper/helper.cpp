@@ -20,15 +20,121 @@
 
 #pragma comment(lib, "Advapi32.lib")
 
+std::string CleanModelResponse(const std::string& raw_response) {
+    std::string text = raw_response;
+    TrimStr(text);
+
+    // 1. Check if the response contains JSON
+    try {
+        size_t json_start = text.find('{');
+        size_t json_end = text.rfind('}');
+        if (json_start != std::string::npos && json_end != std::string::npos && json_end > json_start) {
+            std::string json_str = text.substr(json_start, json_end - json_start + 1);
+            auto j = nlohmann::json::parse(json_str);
+
+            std::string ini_out;
+            std::string summary = "Decompiled code analyzed by BinaryLens";
+            if (j.contains("summary") && j["summary"].is_string()) {
+                summary = j["summary"].get<std::string>();
+            }
+            else if (j.contains("BinaryInfo") && j["BinaryInfo"].is_object() && j["BinaryInfo"].contains("summary")) {
+                summary = j["BinaryInfo"]["summary"].get<std::string>();
+            }
+            else if (j.contains("FunctionInfo") && j["FunctionInfo"].is_object() && j["FunctionInfo"].contains("summary")) {
+                summary = j["FunctionInfo"]["summary"].get<std::string>();
+            }
+
+            // Check for function renames
+            nlohmann::json funcs;
+            if (j.contains("RenamedFunctions") && j["RenamedFunctions"].is_object()) {
+                funcs = j["RenamedFunctions"];
+            }
+            else if (j.contains("renamed_functions") && j["renamed_functions"].is_object()) {
+                funcs = j["renamed_functions"];
+            }
+            else if (j.contains("functions") && j["functions"].is_object()) {
+                funcs = j["functions"];
+            }
+
+            if (!funcs.empty()) {
+                ini_out += "[BinaryInfo]\nsummary=" + summary + "\n\n[RenamedFunctions]\n";
+                for (auto& el : funcs.items()) {
+                    if (el.value().is_string()) {
+                        ini_out += el.key() + "=" + el.value().get<std::string>() + "\n";
+                    }
+                }
+                return ini_out;
+            }
+
+            // Check for local variable renames
+            nlohmann::json locals;
+            if (j.contains("RenamedLocals") && j["RenamedLocals"].is_object()) {
+                locals = j["RenamedLocals"];
+            }
+            else if (j.contains("renamed_locals") && j["renamed_locals"].is_object()) {
+                locals = j["renamed_locals"];
+            }
+            else if (j.contains("variables") && j["variables"].is_object()) {
+                locals = j["variables"];
+            }
+
+            if (!locals.empty()) {
+                ini_out += "[FunctionInfo]\nsummary=" + summary + "\n\n[RenamedLocals]\n";
+                for (auto& el : locals.items()) {
+                    if (el.value().is_string()) {
+                        ini_out += el.key() + "=" + el.value().get<std::string>() + "\n";
+                    }
+                }
+                return ini_out;
+            }
+        }
+    }
+    catch (...) {
+        // Not JSON or parse failed, continue with INI cleaning
+    }
+
+    // 2. Strip markdown fences and conversational noise around INI
+    std::string cleaned;
+    std::istringstream stream(text);
+    std::string line;
+    bool in_section = false;
+
+    while (std::getline(stream, line)) {
+        TrimStr(line);
+        // Skip markdown code block markers
+        if (line.rfind("```", 0) == 0) {
+            continue;
+        }
+        if (line.rfind("[BinaryInfo]", 0) == 0 || line.rfind("[FunctionInfo]", 0) == 0 ||
+            line.rfind("[RenamedFunctions]", 0) == 0 || line.rfind("[RenamedLocals]", 0) == 0) {
+            in_section = true;
+        }
+        if (in_section) {
+            // Filter out comments starting with // or #
+            if (line.rfind("//", 0) == 0 || line.rfind("#", 0) == 0) {
+                continue;
+            }
+            cleaned += line + "\n";
+        }
+    }
+
+    if (!cleaned.empty()) {
+        return cleaned;
+    }
+
+    return text;
+}
+
 std::string GetResponseFromModel(
     std::string model,
     std::string api_key,
     std::string system_prompt,
-    std::string user_prompt
+    std::string user_prompt,
+    std::string custom_base_url
 ) {
-    std::string host;
+    std::string scheme_host_port;
     std::string chat_endpoint;
-    int max_token_len;
+    int max_token_len = 128000;
 
     nlohmann::json body = {
         {"model", model},
@@ -38,27 +144,53 @@ std::string GetResponseFromModel(
         }}
     };
 
-    if (ContainsSubstring(model, "gemini")) {
-        host = "generativelanguage.googleapis.com";
+    if (!custom_base_url.empty()) {
+        std::string url = custom_base_url;
+        TrimStr(url);
+        if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0) {
+            url = "https://" + url;
+        }
+        while (!url.empty() && url.back() == '/') {
+            url.pop_back();
+        }
+        size_t scheme_pos = url.find("://");
+        size_t path_pos = url.find('/', scheme_pos + 3);
+        if (path_pos == std::string::npos) {
+            scheme_host_port = url;
+            chat_endpoint = "/v1/chat/completions";
+        }
+        else {
+            scheme_host_port = url.substr(0, path_pos);
+            chat_endpoint = url.substr(path_pos);
+            if (chat_endpoint.rfind("/chat/completions") == std::string::npos) {
+                chat_endpoint += "/chat/completions";
+            }
+        }
+        max_token_len = 128000;
+    }
+    else if (ContainsSubstring(model, "gemini")) {
+        scheme_host_port = "https://generativelanguage.googleapis.com";
         chat_endpoint = "/v1beta/openai/chat/completions";
-        max_token_len = 950000;
+        max_token_len = 1000000;
     }
     else if (ContainsSubstring(model, "deepseek")) {
-        host = "api.deepseek.com";
+        scheme_host_port = "https://api.deepseek.com";
         chat_endpoint = "/v1/chat/completions";
-        max_token_len = 127000;
+        max_token_len = 128000;
 
         // Set the deepseek output token to max, as the default is 4k
         body["max_tokens"] = 8192;
     }
-    else if (ContainsSubstring(model, "gpt")) {
-        host = "api.openai.com";
+    else if (ContainsSubstring(model, "gpt") || ContainsSubstring(model, "o1") || ContainsSubstring(model, "o3")) {
+        scheme_host_port = "https://api.openai.com";
         chat_endpoint = "/v1/chat/completions";
-        max_token_len = 270000;
+        max_token_len = 128000;
     }
     else {
-        ThreadLogMessage(LOG_PATH, 3, "Unsupported model: %s\n", model.c_str());
-        return std::string();
+        // Default to local Ollama if unspecified
+        scheme_host_port = "http://localhost:11434";
+        chat_endpoint = "/v1/chat/completions";
+        max_token_len = 128000;
     }
 
     int estimated_token_len = static_cast<int>(user_prompt.length() / 2.31);
@@ -71,18 +203,21 @@ std::string GetResponseFromModel(
         return std::string();
     }
 
-    httplib::SSLClient cli(host.c_str());
+    httplib::Client cli(scheme_host_port);
     cli.set_read_timeout(1200, 0);
     cli.set_write_timeout(600, 0);
 
-    ThreadLogMessage(LOG_PATH, 0, "Client created for host: %s\n", host.c_str());
+    ThreadLogMessage(LOG_PATH, 0, "Client created for host: %s\n", scheme_host_port.c_str());
 
-    cli.set_default_headers({
-        {"Authorization", "Bearer " + api_key},
+    httplib::Headers headers = {
         {"Content-Type", "application/json"}
-        });
+    };
+    if (!api_key.empty()) {
+        headers.emplace("Authorization", "Bearer " + api_key);
+    }
+    cli.set_default_headers(headers);
 
-    ThreadLogMessage(LOG_PATH, 0, "Default headers set\n");
+    ThreadLogMessage(LOG_PATH, 0, "Headers set\n");
 
     auto dumpped_body = body.dump();
 
@@ -140,6 +275,7 @@ std::string GetResponseFromModel(
         return std::string();
     }
 
+    model_response = CleanModelResponse(model_response);
     return model_response;
 }
 
@@ -288,7 +424,7 @@ bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& 
         return false;
     }
 
-    char buffer[256];
+    char buffer[4096];
     DWORD buffer_size = sizeof(buffer);
     if (RegGetValueA(hKey, nullptr, value_name, RRF_RT_REG_SZ, nullptr, buffer, &buffer_size) != ERROR_SUCCESS) {
         RegCloseKey(hKey);

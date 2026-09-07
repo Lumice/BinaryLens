@@ -1,4 +1,4 @@
-﻿#include <fstream>
+#include <fstream>
 #include <windows.h>
 #include <thread>
 #include <shlwapi.h>
@@ -179,11 +179,22 @@ bool RenameSubsFromFile(std::string& renamed_funcs_path, int* renamed_sub_count)
             continue;
         }
 
-        if (!set_name(cur_func->start_ea, renamed_sub, SN_NOWARN | SN_FORCE)) {
-            LogMessage(LOG_PATH, 1, "[BinaryLens] WARNING: Failed to rename (%s) to (%s)\n", func_name.c_str(), renamed_sub);
+        std::string clean_sub_name = renamed_sub;
+        TrimStr(clean_sub_name);
+        if (clean_sub_name.size() >= 2 && clean_sub_name.front() == '"' && clean_sub_name.back() == '"') {
+            clean_sub_name = clean_sub_name.substr(1, clean_sub_name.size() - 2);
+        }
+        for (char& c : clean_sub_name) {
+            if (!isalnum((unsigned char)c) && c != '_') {
+                c = '_';
+            }
+        }
+
+        if (!set_name(cur_func->start_ea, clean_sub_name.c_str(), SN_NOWARN | SN_FORCE)) {
+            LogMessage(LOG_PATH, 1, "[BinaryLens] WARNING: Failed to rename (%s) to (%s)\n", func_name.c_str(), clean_sub_name.c_str());
         }
         else {
-            LogMessage(LOG_PATH, 0, "Renamed (%s) to (%s)\n", func_name.c_str(), renamed_sub);
+            LogMessage(LOG_PATH, 0, "Renamed (%s) to (%s)\n", func_name.c_str(), clean_sub_name.c_str());
             (*renamed_sub_count)++;
         }
     }
@@ -229,16 +240,27 @@ bool RenameVariablesFromFile(std::string renamed_vars_path, VarRenameContext ren
             continue;
         }
 
-        if (var_name == renamed_var) {
+        std::string clean_var_name = renamed_var;
+        TrimStr(clean_var_name);
+        if (clean_var_name.size() >= 2 && clean_var_name.front() == '"' && clean_var_name.back() == '"') {
+            clean_var_name = clean_var_name.substr(1, clean_var_name.size() - 2);
+        }
+        for (char& c : clean_var_name) {
+            if (!isalnum((unsigned char)c) && c != '_') {
+                c = '_';
+            }
+        }
+
+        if (var_name == clean_var_name) {
             LogMessage(LOG_PATH, 0, "Var name is the same as the new name, skipping it: (%s)\n", var_name.c_str());
             continue;
         }
 
-        if (!(vdui->rename_lvar(lvar, renamed_var, true))) {
-            LogMessage(LOG_PATH, 1, "[BinaryLens] WARNING: Failed to rename (%s) to (%s)\n", var_name.c_str(), renamed_var);
+        if (!(vdui->rename_lvar(lvar, clean_var_name.c_str(), true))) {
+            LogMessage(LOG_PATH, 1, "[BinaryLens] WARNING: Failed to rename (%s) to (%s)\n", var_name.c_str(), clean_var_name.c_str());
         }
         else {
-            LogMessage(LOG_PATH, 0, "Renamed (%s) to (%s)\n", var_name.c_str(), renamed_var);
+            LogMessage(LOG_PATH, 0, "Renamed (%s) to (%s)\n", var_name.c_str(), clean_var_name.c_str());
             (*renamed_var_count)++;
         }
 
@@ -383,6 +405,7 @@ bool RenameAllSubs() {
     std::thread([subs, message]() {
         std::string api_key;
         std::string model_to_use;
+        std::string custom_base_url;
 
         if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "model_to_use", model_to_use)) {
             ThreadLogMessage(LOG_PATH, 3, "Please select a model in order to proceed with the subroutine renaming."
@@ -393,13 +416,15 @@ bool RenameAllSubs() {
             return;
         }
 
+        ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "custom_base_url", custom_base_url);
+
         ThreadLogMessage(LOG_PATH, 1, "[BinaryLens] Using model: %s\n", model_to_use.c_str());
 
         if (ContainsSubstring(model_to_use, "gemini")) {
             if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "gemini_api_key", api_key)) {
                 ThreadLogMessage(LOG_PATH, 3,
-                    "API key not found for the selected model (Gemini). Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit / BinaryLens / Select Model / Gemini / Set API key.\n"
+                    "API key not found for Gemini. Please set it before proceeding."
+                    "\n\nYou can do this by navigating to Edit / BinaryLens / Select Model / Gemini / Set Gemini API key.\n"
                 );
                 sub_rename_end = true;
                 sub_ren_pass_count = 0;
@@ -409,19 +434,19 @@ bool RenameAllSubs() {
         else if (ContainsSubstring(model_to_use, "deepseek")) {
             if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "deepseek_api_key", api_key)) {
                 ThreadLogMessage(LOG_PATH, 3,
-                    "API key not found for the selected model (deepseek). Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/deepseek/Set API key.\n"
+                    "API key not found for DeepSeek. Please set it before proceeding."
+                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/Deepseek/Set DeepSeek API key.\n"
                 );
                 sub_rename_end = true;
                 sub_ren_pass_count = 0;
                 return;
             }
         }
-        else if (ContainsSubstring(model_to_use, "gpt")) {
+        else if (ContainsSubstring(model_to_use, "gpt") || ContainsSubstring(model_to_use, "o1") || ContainsSubstring(model_to_use, "o3")) {
             if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "openai_api_key", api_key)) {
                 ThreadLogMessage(LOG_PATH, 3,
-                    "API key not found for the selected model (OpenAI). Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/OpenAI/Set API key.\n"
+                    "API key not found for OpenAI. Please set it before proceeding."
+                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/OpenAI/Set OpenAI API key.\n"
                 );
                 sub_rename_end = true;
                 sub_ren_pass_count = 0;
@@ -429,10 +454,12 @@ bool RenameAllSubs() {
             }
         }
         else {
-            ThreadLogMessage(LOG_PATH, 3, "Unsupported model: %s\n", model_to_use.c_str());
-            sub_rename_end = true;
-            sub_ren_pass_count = 0;
-            return;
+            // Custom or Local model (Ollama / OpenRouter / etc.)
+            ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "custom_api_key", api_key);
+            if (custom_base_url.empty()) {
+                custom_base_url = "http://localhost:11434/v1";
+                ThreadLogMessage(LOG_PATH, 1, "[BinaryLens] Using default local base URL: %s\n", custom_base_url.c_str());
+            }
         }
 
         LARGE_INTEGER freq, start, stop;
@@ -448,7 +475,7 @@ bool RenameAllSubs() {
         ThreadLogMessage(LOG_PATH, 0, "System Prompt:\n%s\n\nUser Prompt\n%s\n", SUB_REN_SYS_PROMPT, model_request.c_str());
         ThreadLogMessage(LOG_PATH, 0, "====================\n\n");
 
-        std::string model_response = GetResponseFromModel(model_to_use, api_key, SUB_REN_SYS_PROMPT, model_request);
+        std::string model_response = GetResponseFromModel(model_to_use, api_key, SUB_REN_SYS_PROMPT, model_request, custom_base_url);
         if (model_response.empty()) {
             sub_rename_end = true;
             sub_ren_pass_count = 0;
@@ -602,6 +629,7 @@ bool RenameVariables(TWidget* t_widget) {
     std::thread([func = std::move(func), func_ea, rename_vars]() {
         std::string api_key;
         std::string model_to_use;
+        std::string custom_base_url;
 
         if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "model_to_use", model_to_use)) {
             ThreadLogMessage(LOG_PATH, 3, "Please select a model in order to proceed with the variable renaming."
@@ -611,12 +639,14 @@ bool RenameVariables(TWidget* t_widget) {
             return;
         }
 
+        ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "custom_base_url", custom_base_url);
+
         ThreadLogMessage(LOG_PATH, 1, "[BinaryLens] Using model: %s\n", model_to_use.c_str());
 
         if (ContainsSubstring(model_to_use, "gemini")) {
             if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "gemini_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3, "API key not found for the selected model (Gemini). Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/Gemini/Set API key.\n"
+                ThreadLogMessage(LOG_PATH, 3, "API key not found for Gemini. Please set it before proceeding."
+                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/Gemini/Set Gemini API key.\n"
                 );
                 var_rename_end = true;
                 return;
@@ -624,26 +654,29 @@ bool RenameVariables(TWidget* t_widget) {
         }
         else if (ContainsSubstring(model_to_use, "deepseek")) {
             if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "deepseek_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3, "API key not found for the selected model (deepseek). Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/deepseek/Set API key.\n"
+                ThreadLogMessage(LOG_PATH, 3, "API key not found for DeepSeek. Please set it before proceeding."
+                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/deepseek/Set DeepSeek API key.\n"
                 );
                 var_rename_end = true;
                 return;
             }
         }
-        else if (ContainsSubstring(model_to_use, "gpt")) {
+        else if (ContainsSubstring(model_to_use, "gpt") || ContainsSubstring(model_to_use, "o1") || ContainsSubstring(model_to_use, "o3")) {
             if (!ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "openai_api_key", api_key)) {
-                ThreadLogMessage(LOG_PATH, 3, "API key not found for the selected model (OpenAI). Please set it before proceeding."
-                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/OpenAI/Set API key.\n"
+                ThreadLogMessage(LOG_PATH, 3, "API key not found for OpenAI. Please set it before proceeding."
+                    "\n\nYou can do this by navigating to Edit/BinaryLens/Select Model/OpenAI/Set OpenAI API key.\n"
                 );
                 var_rename_end = true;
                 return;
             }
         }
         else {
-            ThreadLogMessage(LOG_PATH, 3, "Unsupported model: %s\n", model_to_use.c_str());
-            var_rename_end = true;
-            return;
+            // Custom or Local model (Ollama / OpenRouter / etc.)
+            ReadRegistryData("SOFTWARE\\BinaryLensPlugin", "custom_api_key", api_key);
+            if (custom_base_url.empty()) {
+                custom_base_url = "http://localhost:11434/v1";
+                ThreadLogMessage(LOG_PATH, 1, "[BinaryLens] Using default local base URL: %s\n", custom_base_url.c_str());
+            }
         }
 
         LARGE_INTEGER freq, start, stop;
@@ -656,7 +689,7 @@ bool RenameVariables(TWidget* t_widget) {
         ThreadLogMessage(LOG_PATH, 0, "System Prompt:\n%s\n\nUser Prompt\n%s\n", VAR_REN_SYS_PROMPT, func.c_str());
         ThreadLogMessage(LOG_PATH, 0, "====================\n\n");
 
-        std::string model_response = GetResponseFromModel(model_to_use, api_key, VAR_REN_SYS_PROMPT, func);
+        std::string model_response = GetResponseFromModel(model_to_use, api_key, VAR_REN_SYS_PROMPT, func, custom_base_url);
         if (model_response.empty()) {
             var_rename_end = true;
             return;
