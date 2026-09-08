@@ -17,58 +17,68 @@ BinaryLens works with IDA Pro 8.x and 9.x on Windows, macOS, and Linux.
 
 ## Features
 
-### 1. Rename All Subroutines
-When IDA disassembles a binary file, it gives unknown functions generic names like `sub_140001000`. BinaryLens decompiles these functions in batches, asks the model what they do, and renames them to descriptive names like `ValidateUserToken` or `ParsePacketHeader`.
-
+### 1. High-Throughput Subroutine Renaming
+When IDA disassembles a binary, it assigns generic names like `sub_140001000`. BinaryLens decompiles functions in batches, prompts the model for semantic identification, and renames them to PascalCase names (e.g., `ValidateUserToken`, `DecryptPayload`).
 * Menu location: `Edit -> BinaryLens -> Rename all subroutines`
-* You can provide an optional target hint (for example, "network client" or "cryptography library") to help the model pick accurate names. A drop-down menu remembers your previous inputs so you can easily reuse them or clear history.
+* Contextual Hints: Provide optional target hints (e.g., "network protocol" or "file parser"). A drop-down menu preserves hint history.
+* Adaptive Queueing: Prompts are bounded to 45,000 characters. Subroutines that exceed batch boundaries are smoothly carried to the next batch without silent truncation.
+* Smart Filtering: Automatically ignores static library runtime code (FLIRT `FUNC_LIB`) and compiler thunk jumps (`FUNC_THUNK`) to conserve tokens and protect known symbols.
 
-### 2. Rename Variables in a Function
-In the Hex-Rays pseudocode view, local variables often have generic names like `a1`, `v1`, and `v2`. BinaryLens reads the function code and renames those variables to names that describe their purpose, like `socket_handle` or `packet_size`.
-
+### 2. Pseudocode Variable Renaming
+Within the Hex-Rays pseudocode view, local variables often have meaningless names like `a1`, `v1`, and `v2`. BinaryLens inspects variable data flows and assigns descriptive names (e.g., `SocketHandle`, `PacketSize`).
 * How to use: Right-click inside any pseudocode window and select `BinaryLens: Rename Variables`.
 
-### 3. Explain Current Function
-BinaryLens reads the decompiled C pseudocode of the active function and prints an explanation in the IDA Output window. The explanation describes the purpose of the function, the function arguments, and potential security issues.
-
+### 3. Function Behavior Explanation
+BinaryLens analyzes decompiled C pseudocode and prints a structured summary to the IDA Output window, detailing executive behavior, parameters, return values, and potential security considerations.
 * How to use: Right-click inside any pseudocode window and select `BinaryLens: Explain Function`.
 
-### 4. Progress Window with Instant Stop
-When you start a batch analysis, a progress dialog appears.
-* It displays the current batch number, the total batches, and how many functions were renamed.
-* It stays attached to IDA so it does not float over other applications when you switch windows.
-* If you want to halt the process, click the `Stop Analysis` button. The window closes immediately and preserves all renames completed so far.
-* You can also click `Edit -> BinaryLens -> Stop analysis` from the menu at any time.
-
-### 5. Reasoning Level Control
-Some models, like DeepSeek V4 Flash, spend extra tokens on internal chain-of-thought thinking before they answer. BinaryLens includes a Reasoning Level setting (`none`, `low`, `medium`, `high`).
-* Setting the level to `none` is recommended for batch renaming. This mode delivers maximum speed and prevents the model from running out of tokens on large function lists.
+### 4. Modeless Progress Dialog with Instant Stop
+A dedicated progress dialog provides real-time visibility into active analysis.
+* Displays batch numbers, processed subroutines, successful renames, and total elapsed runtime.
+* Attaches directly to the IDA main window to prevent intrusive desktop floating.
+* Clicking `Stop Analysis` immediately sets an internal cancellation fence, terminates background execution, and preserves all completed database mutations.
 
 ---
 
-### Installation
+## Architecture and Safety Hardening
 
-#### Option A: IDA 9.x (HCLI / Plugin Manager)
-Download the release archive from GitHub and install via HCLI:
+BinaryLens is engineered for strict database integrity and thread safety:
+
+* **Monotonic Run Ownership**: Every analysis session is assigned a monotonic run ID guarded by an internal lock. Stale or cancelled worker threads cannot write to the active database.
+* **Symbol Allowlisting**: All proposed renames must exist within the exact batch submitted. Injected or hallucinated addresses returned by models are rejected.
+* **Content Hash Verification**: Functions are fingerprinted with a SHA-256 byte hash before prompt submission. If a function is modified concurrently in the database during network transit, the rename is discarded.
+* **Main Thread Synchronization**: All Hex-Rays decompilation and database mutation calls are synchronized through `ida_kernwin.execute_sync` under `MFF_WRITE`. All IDA console logging is marshaled via `MFF_FAST`.
+* **Pipelined Batch Execution**: Overlaps remote LLM network latency with main-thread decompilation of the subsequent batch, eliminating idle CPU time without increasing concurrent network load.
+* **Network Fault Tolerance**: Enforces a 5 MB payload ceiling on model responses and executes automatic retries with exponential backoff on HTTP 429, 5xx, and socket timeouts. Session identifiers are rotated on retries to bypass stalled gateway buffers.
+* **Reasoning Trace Segregation**: Separates chain-of-thought reasoning from actual response data. Model reasoning traces are logged diagnostics and never substituted for code modifications.
+* **Atomic Configuration**: Configuration files are written to temporary files, flushed, synced via `os.fsync`, and replaced atomically to prevent configuration file corruption.
+* **Cross-Version Qt Abstraction**: Resolves UI enums dynamically across PySide6, PyQt6, and PyQt5.
+
+---
+
+## Installation
+
+### Option A: IDA 9.x (HCLI / Plugin Manager)
+Install directly from the release package using the Hex-Rays Command Line Interface:
 ```bash
 hcli plugin install BinaryLens-v1.2.0.zip
 ```
 
-#### Option B: Manual Drop-in (IDA 8.x and 9.x)
-You do not need a C++ compiler or external DLL files.
-1. Copy `binarylens.py` (from the release archive root, or `python/binarylens.py` if building from source) into your IDA plugins directory:
+### Option B: Manual Drop-in (IDA 8.x and 9.x)
+BinaryLens is a pure IDAPython plugin with zero C++ compilation and no external pip dependencies.
+1. Copy `binarylens.py` into your IDA plugins directory:
    * Windows: `%APPDATA%\Hex-Rays\IDA Pro\plugins\`
    * Linux / macOS: `~/.idapro/plugins/`
-2. Start IDA Pro.
-3. Open `Edit -> BinaryLens -> Settings...` to choose your provider, enter your API key, and select your model.
+2. Start or restart IDA Pro.
+3. Open `Edit -> BinaryLens -> Settings...` to configure your endpoint and model.
 
 ---
 
 ## Supported Providers
 
-BinaryLens works with any provider that supports the standard OpenAI-compatible format:
+BinaryLens works with any OpenAI-compatible completions endpoint:
 
-* **OpenCode Go & Zen**: `https://opencode.ai/zen/go/v1` (Default model: `deepseek-v4-flash`)
+* **OpenCode Go & Zen**: `https://opencode.ai/zen/go/v1` (Recommended: `deepseek-v4-flash`)
 * **Local Offline Models (Ollama)**: `http://localhost:11434/v1` (no API key required)
 * **Local Offline Models (LM Studio)**: `http://localhost:1234/v1` (no API key required)
 * **Google Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai`
@@ -80,12 +90,13 @@ BinaryLens works with any provider that supports the standard OpenAI-compatible 
 
 ## Configuration Settings
 
-Open `Edit -> BinaryLens -> Settings...` to customize your setup:
+Access the configuration dialog via `Edit -> BinaryLens -> Settings...`:
 
-* **Preset**: Quick-fills the base URL and recommended model for popular providers.
-* **Base URL**: The web address of the completion API endpoint.
-* **Model Name**: The model identifier you want to call (such as `deepseek-v4-flash` or `gemini-2.5-pro`).
-* **API Key**: Your secret key for cloud providers. Leave this empty for local tools like Ollama or LM Studio.
-* **Batch Size**: The number of functions analyzed per prompt batch (default: `20`; 10–20 is recommended for fast turnarounds on large binaries).
-* **Reasoning Level**: The thinking intensity for reasoning models. Keep this at `none` for fast batch renaming.
-* **Max Function Size (KB)**: Skips functions larger than this threshold in batch mode to prevent decompiler stalls on unrolled code (default: `12` KB; set to `0` for unlimited).
+* **Preset**: Quick-fills endpoint URLs and recommended models for major providers.
+* **Base URL**: The root URL for the OpenAI-compatible completion API.
+* **Model Name**: The target model identifier (e.g., `deepseek-v4-flash`, `gemini-2.5-pro`).
+* **API Key**: Authentication token for cloud providers (optional for local models).
+* **Batch Size**: Number of subroutines processed per prompt (default: `20`; 15–30 recommended).
+* **Reasoning Level**: Thinking intensity for reasoning models (`none`, `low`, `medium`, `high`). Setting to `none` is recommended for maximum batch throughput.
+* **Max Function Size (KB)**: Skips subroutines exceeding this size threshold to avoid decompiler stalls on unrolled code (default: `12` KB; `0` disables limit).
+* **Timeout (Seconds)**: Socket timeout bounded between 10s and 30s (default: `20`s) to fail fast on stalled reverse proxies and retry cleanly.
