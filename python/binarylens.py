@@ -104,7 +104,7 @@ DEFAULT_CONFIG = {
     "api_key": "",
     "batch_size": 40,
     "max_tokens_per_req": 128000,
-    "timeout_sec": 45,
+    "timeout_sec": 20,
     "reasoning_effort": "none",
     "max_func_size_kb": 12,
     "hint_history": [],
@@ -384,11 +384,11 @@ def call_llm(
     endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
     model = config.get("model", "deepseek-v4-flash")
     api_key = config.get("api_key", "").strip()
-    raw_timeout = config.get("timeout_sec", 45)
+    raw_timeout = config.get("timeout_sec", 20)
     try:
-        timeout = max(15, min(90, int(raw_timeout)))
+        timeout = max(10, min(30, int(raw_timeout)))
     except (ValueError, TypeError):
-        timeout = 45
+        timeout = 20
 
     payload = {
         "model": model,
@@ -409,19 +409,6 @@ def call_llm(
         payload["reasoning_effort"] = reasoning_effort
 
     body_bytes = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(endpoint, data=body_bytes, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) BinaryLens/2.0")
-    if "opencode" in endpoint.lower():
-        session_id = getattr(call_llm, "_session_id", None)
-        if not session_id:
-            session_id = f"bl_{uuid.uuid4().hex[:16]}"
-            setattr(call_llm, "_session_id", session_id)
-        req.add_header("x-opencode-session", session_id)
-        req.add_header("x-opencode-client", "binarylens")
-    if api_key:
-        req.add_header("Authorization", f"Bearer {api_key}")
-
     ctx = ssl.create_default_context()
     MAX_RETRIES = 2
     MAX_RESP_BYTES = 5 * 1024 * 1024  # 5 MB ceiling (BL-011)
@@ -429,6 +416,16 @@ def call_llm(
     for attempt in range(MAX_RETRIES + 1):
         if cancel_check and cancel_check():
             return None
+
+        # Create fresh request per attempt with fresh session identifier
+        req = urllib.request.Request(endpoint, data=body_bytes, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) BinaryLens/2.0")
+        if "opencode" in endpoint.lower():
+            req.add_header("x-opencode-session", f"bl_{uuid.uuid4().hex[:16]}")
+            req.add_header("x-opencode-client", "binarylens")
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
 
         if on_log:
             attempt_info = f" (Attempt {attempt + 1}/{MAX_RETRIES + 1})" if attempt > 0 else ""
